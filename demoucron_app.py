@@ -481,13 +481,18 @@ class App(tk.Tk):
         
         # Icône
         try:
-            from PIL import Image, ImageTk
-            img = Image.open("algorithme.png")
-            img = img.resize((32, 32), Image.Resampling.LANCZOS)
-            self.ico = ImageTk.PhotoImage(img)
-            self.wm_iconphoto(False, self.ico)
+    # ── Icône barre des tâches Windows (.ico) ──
+            self.iconbitmap("algorithme.ico")         
         except Exception:
-            pass
+            try:
+                # ── Fallback PNG si pas de .ico ──
+                from PIL import Image, ImageTk
+                img = Image.open("algorithme.png")
+                img = img.resize((32, 32), Image.Resampling.LANCZOS)
+                self.ico = ImageTk.PhotoImage(img)
+                self.wm_iconphoto(True, self.ico)      
+            except Exception:
+                pass
         
         self.tk_setPalette(
             background=C["bg"],
@@ -828,29 +833,45 @@ class App(tk.Tk):
         """Popup au démarrage pour configurer le graphe."""
         p = popup_base(self, "Configuration initiale", w=480, h=420)
 
+        # ── Icône de la popup ──
+        try:
+            p.iconbitmap("algorithme.ico")        
+        except Exception:
+            try:
+                from PIL import Image, ImageTk
+                img = Image.open("algorithme.png")
+                img = img.resize((32, 32), Image.Resampling.LANCZOS)
+                self._popup_ico = ImageTk.PhotoImage(img)
+                p.wm_iconphoto(False, self._popup_ico)
+            except Exception:
+                pass
+
         # Top bar avec icône
-        top = tk.Frame(p, bg=C["cyan"], height=60)
+        top = tk.Frame(p, bg=C["violet"], height=60)  
         top.pack(fill="x", side="top")
-        top_inner = tk.Frame(top, bg=C["cyan"])
+        top_inner = tk.Frame(top, bg=C["violet"])      
         top_inner.pack(fill="both", expand=True, padx=20, pady=12)
-        
+
         try:
             from PIL import Image, ImageTk
             img = Image.open("algorithme.png")
             img = img.resize((48, 48), Image.Resampling.LANCZOS)
             self.popup_logo = ImageTk.PhotoImage(img)
-            tk.Label(top_inner, image=self.popup_logo, bg=C["cyan"]).pack(side="left", padx=12)
+            # ── Cadre blanc autour de l'icône pour la faire ressortir ──
+            icon_frame = tk.Frame(top_inner, bg=C["violet"], padx=3, pady=3)
+            icon_frame.pack(side="left", padx=12)
+            tk.Label(icon_frame, image=self.popup_logo, bg=C["violet"]).pack()
         except Exception:
             pass
-        
-        txt_frame = tk.Frame(top_inner, bg=C["cyan"])
+
+        txt_frame = tk.Frame(top_inner, bg=C["violet"])  
         txt_frame.pack(side="left", fill="both", expand=True)
         tk.Label(txt_frame, text="Configuration Demoucron",
-                 bg=C["cyan"], fg=C["white"],
-                 font=("Segoe UI", 14, "bold")).pack(anchor="w")
+                bg=C["violet"], fg=C["white"],             
+                font=("Segoe UI", 14, "bold")).pack(anchor="w")
         tk.Label(txt_frame, text="Définissez les paramètres de votre graphe",
-                 bg=C["cyan"], fg=C["cyan_l"],
-                 font=("Segoe UI", 9)).pack(anchor="w")
+                bg=C["violet"], fg=C["cyan"],             
+                font=("Segoe UI", 9)).pack(anchor="w")
 
         c = tk.Frame(p, bg=C["surface"], padx=20, pady=18)
         c.pack(fill="both", expand=True)
@@ -1209,6 +1230,10 @@ class App(tk.Tk):
             new_lbl = str(new_i + 1)
 
         p = popup_base(self, "Ajouter un sommet", w=380, h=210)
+        try:
+            p.iconbitmap("algorithme.ico")        
+        except Exception:
+             pass
         c = tk.Frame(p, bg=C["surface"], padx=20, pady=16)
         c.pack(fill="both", expand=True)
         tk.Frame(p, bg=C["cyan"], height=4).place(x=0, y=0, relwidth=1)
@@ -1249,6 +1274,10 @@ class App(tk.Tk):
 
     def _del_vertex(self):
         p = popup_base(self, "Supprimer un sommet", w=380, h=230)
+        try:
+            p.iconbitmap("algorithme.ico")        # ← .ico pour Windows
+        except Exception:
+            pass
         c = tk.Frame(p, bg=C["surface"], padx=20, pady=16)
         c.pack(fill="both", expand=True)
         tk.Frame(p, bg=C["red"], height=4).place(x=0, y=0, relwidth=1)
@@ -1292,6 +1321,10 @@ class App(tk.Tk):
 
     def _edit_vertex(self, idx=None):
         p = popup_base(self, "Modifier un sommet", w=400, h=260)
+        try:
+            p.iconbitmap("algorithme.ico")       
+        except Exception:
+            pass
         c = tk.Frame(p, bg=C["surface"], padx=20, pady=16)
         c.pack(fill="both", expand=True)
         tk.Frame(p, bg=C["cyan"], height=4).place(x=0, y=0, relwidth=1)
@@ -1342,6 +1375,12 @@ class App(tk.Tk):
                    with_weight=True):
         """Popup générique pour créer/modifier/supprimer un arc."""
         p = popup_base(self, title, w=410, h=290 if with_weight else 250)
+        
+        try:
+            p.iconbitmap("algorithme.ico")        
+        except Exception:
+            pass
+
         c = tk.Frame(p, bg=C["surface"], padx=20, pady=16)
         c.pack(fill="both", expand=True)
         tk.Frame(p, bg=bar_color, height=4).place(x=0, y=0, relwidth=1)
