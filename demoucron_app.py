@@ -1,1227 +1,1426 @@
 from __future__ import annotations
 
 import math
-import os
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import List, Optional, Tuple
 
-from demoucron import (
-    DemoucronError,
-    DemoucronResult,
-    build_path,
-    demoucron_max,
-    demoucron_min,
-)
+from demoucron import DemoucronResult, build_path, demoucron_max, demoucron_min
 
-# ---------- Constantes d'interface ----------
-PALETTE = {
-    "primary": "#00C21C",
-    "primary_dark": "#098E00",
-    "path": "#0B5FFF",
-    "path_node": "#0B5FFF",
-    "bg": "#FFFFFF",
-    "text": "#333333",
-    "text_secondary": "#666666",
-    "text_light": "#999999",
-    "panel": "#FFFFFF",
-    "line": "#E0E0E0",
-    "button_hover": "#00A017",
-    "error_bg": "#FFEBEE",
-    "error_fg": "#C62828",
+# ═══════════════════════════════════════════════════════════════
+#  PALETTE — Charte Data Terra 2020
+# ═══════════════════════════════════════════════════════════════
+C = {
+    "violet":       "#2E2253",
+    "violet_l":     "#3D2F70",
+    "cyan":         "#08B0A0",
+    "cyan_l":       "#0ACFBC",
+    "cyan_bg":      "#E6F7F6",
+    "bg":           "#F4F5F7",
+    "surface":      "#FAFBFC",
+    "surface2":     "#F0F1F4",
+    "border":       "#D8DAE5",
+    "text":         "#2E2253",
+    "text2":        "#5A5870",
+    "text3":        "#9896A8",
+    "red":          "#BA3718",
+    "orange":       "#EE7412",
+    "blue":         "#23609F",
+    "lightblue":    "#4CB4E7",
+    "path_hl":      "#08B0A0",
+    "path_bg":      "#C8F0EC",
+    "white":        "#FFFFFF",
 }
 
-MAX_WEIGHT = 1000  # poids maximal autorisé
-MIN_WEIGHT = 0     # poids minimal autorisé
+INF_STR = "∞"
 
-# ---------- Fonctions utilitaires ----------
-def _format_number(v: float) -> str:
-    if abs(v - round(v)) < 1e-9:
-        return str(int(round(v)))
-    return f"{v:.3f}"
 
-def _alpha_label(index: int) -> str:
-    """Convertit 0->A, 1->B, ..., 25->Z, 26->AA, etc."""
-    if index < 0:
-        return "?"
-    s = ""
-    n = index
+def _fmt(v: float) -> str:
+    if v == float("inf"):  return INF_STR
+    if v == float("-inf"): return f"-{INF_STR}"
+    return str(int(round(v))) if abs(v - round(v)) < 1e-9 else f"{v:.1f}"
+
+
+def _alpha(i: int) -> str:
+    s, n = "", i
     while True:
         n, r = divmod(n, 26)
-        s = chr(ord("A") + r) + s
-        if n == 0:
-            break
+        s = chr(65 + r) + s
+        if n == 0: break
         n -= 1
     return s
 
-# ---------- Widget personnalisé : bouton animé ----------
-class AnimatedButton(tk.Button):
-    def __init__(self, master: tk.Widget, text: str, command=None, **kwargs) -> None:
-        super().__init__(master, text=text, command=command, **kwargs)
-        self.config(
-            font=("Segoe UI", 9, "bold"),
-            fg="white",
-            bg=PALETTE["primary"],
-            activebackground=PALETTE["primary_dark"],
-            activeforeground="white",
-            relief="solid",
+
+def _make_labels(n: int, mode: str, prefix: str = "X") -> List[str]:
+    """mode: 'num'=1,2,3  'alpha'=A,B,C  'prefix'=X1,X2,..."""
+    if mode == "alpha":
+        return [_alpha(i) for i in range(n)]
+    elif mode == "prefix":
+        return [f"{prefix}{i+1}" for i in range(n)]
+    else:
+        return [str(i+1) for i in range(n)]
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Bouton stylé — Simple & moderne
+# ═══════════════════════════════════════════════════════════════
+class ModernBtn(tk.Button):
+    """Bouton simple avec border-radius, effet hover fluide."""
+    STYLES = {
+        "primary": (C["violet"],  C["violet_l"],  C["white"]),
+        "cyan":    (C["cyan"],    C["cyan_l"],     C["white"]),
+        "ghost":   (C["surface"], C["surface2"],   C["violet"]),
+        "danger":  (C["red"],     "#9A2D14",       C["white"]),
+        "warn":    (C["orange"],  "#D0650F",       C["white"]),
+    }
+    
+    def __init__(self, parent, text, cmd=None, style="primary", width=None, **kw):
+        bg, hov, fg = self.STYLES.get(style, self.STYLES["primary"])
+        cfg = dict(
+            font=("Segoe UI", 9),
+            fg=fg,
+            bg=bg,
+            activebackground=hov,
+            activeforeground=fg,
+            relief="flat",
             bd=0,
-            padx=8,
-            pady=4,
+            padx=14,
+            pady=8,
             cursor="hand2",
             highlightthickness=0,
+            overrelief="flat"
         )
-        self._base_bg = PALETTE["primary"]
-        self._hover_bg = PALETTE["button_hover"]
+        if width:
+            cfg["width"] = width
+        super().__init__(parent, text=text, command=cmd, **cfg, **kw)
+        self._bg, self._hov, self._fg = bg, hov, fg
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
 
-    def _on_enter(self, _event: tk.Event) -> None:
-        self.config(bg=self._hover_bg)
+    def _on_enter(self, _):
+        self.config(bg=self._hov)
 
-    def _on_leave(self, _event: tk.Event) -> None:
-        self.config(bg=self._base_bg)
+    def _on_leave(self, _):
+        self.config(bg=self._bg)
 
-# ---------- Éditeur de matrice ----------
+    def flash(self):
+        orig = self._bg
+        self.config(bg=C["cyan"])
+        self.after(150, lambda: self.config(bg=orig))
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Éditeur de matrice
+# ═══════════════════════════════════════════════════════════════
 class MatrixEditor(tk.Frame):
-    def __init__(self, master: tk.Widget, rows: int = 5, cols: int = 5) -> None:
-        super().__init__(master, bg=PALETTE["bg"], highlightthickness=1, highlightbackground=PALETTE["line"])
-        self.rows = rows
-        self.cols = cols
+    def __init__(self, parent, n=4, labels=None):
+        super().__init__(parent, bg=C["surface"])
+        self.n = n
+        self.labels: List[str] = labels or _make_labels(n, "num")
         self.entries: List[List[tk.Entry]] = []
-        self.labels: List[str] = [str(i + 1) for i in range(min(rows, cols))]
-        self.zoom_factor: float = 1.0
-        self._build_grid()
+        self._on_change_cb = None
+        self._build()
 
-    def _snapshot_values(self) -> List[List[str]]:
-        if not self.entries:
-            return []
-        return [[cell.get() for cell in row] for row in self.entries]
+    def set_change_callback(self, cb):
+        self._on_change_cb = cb
 
-    def _build_grid(self) -> None:
-        previous_values = self._snapshot_values()
-        for child in self.winfo_children():
-            child.destroy()
+    def _snap(self):
+        return [[c.get() for c in row] for row in self.entries] if self.entries else []
+
+    def _build(self):
+        prev = self._snap()
+        for w in self.winfo_children():
+            w.destroy()
         self.entries = []
+        n = self.n
+        ef = ("Consolas", 9)
+        ew = 6
 
-        # En-têtes colonnes
-        for j in range(self.cols):
-            header = self.labels[j] if j < len(self.labels) else str(j + 1)
-            font_size = max(8, int(10 * self.zoom_factor))
-            lbl = tk.Label(
-                self,
-                text=header,
-                bg=PALETTE["bg"],
-                fg=PALETTE["text"],
-                font=("Segoe UI", font_size, "bold"),
-            )
-            lbl.grid(row=0, column=j + 1, padx=2, pady=2)
+        tk.Label(self, text="", bg=C["surface2"], width=4, relief="flat").grid(
+            row=0, column=0, padx=1, pady=1)
 
-        # Lignes
-        for i in range(self.rows):
-            header = self.labels[i] if i < len(self.labels) else str(i + 1)
-            font_size = max(8, int(10 * self.zoom_factor))
-            lbl = tk.Label(
-                self,
-                text=header,
-                bg=PALETTE["bg"],
-                fg=PALETTE["text"],
-                font=("Segoe UI", font_size, "bold"),
-            )
-            lbl.grid(row=i + 1, column=0, padx=2, pady=2)
+        for j in range(n):
+            h = self.labels[j] if j < len(self.labels) else str(j+1)
+            tk.Label(self, text=h, bg=C["violet"], fg=C["white"],
+                     font=("Segoe UI", 9, "bold"), width=ew,
+                     relief="flat", padx=2, pady=4).grid(
+                row=0, column=j+1, padx=1, pady=1, sticky="nsew")
 
-            row_entries: List[tk.Entry] = []
-            for j in range(self.cols):
-                small_grid = max(self.rows, self.cols) <= 8
-                base_width = 7 if small_grid else 6
-                base_font = 10 if small_grid else 9
-                entry_width = max(4, int(round(base_width * self.zoom_factor)))
-                entry_font = ("Consolas", max(8, int(base_font * self.zoom_factor)))
-                e = tk.Entry(
-                    self,
-                    width=entry_width,
-                    justify="center",
-                    relief="solid",
-                    bd=1,
-                    font=entry_font,
-                )
-                e.grid(row=i + 1, column=j + 1, padx=1, pady=1, ipady=max(2, int(4 * self.zoom_factor)))
+        for i in range(n):
+            h = self.labels[i] if i < len(self.labels) else str(i+1)
+            tk.Label(self, text=h, bg=C["violet"], fg=C["white"],
+                     font=("Segoe UI", 9, "bold"), width=4,
+                     relief="flat", padx=2, pady=4).grid(
+                row=i+1, column=0, padx=1, pady=1, sticky="nsew")
 
-                prev = ""
-                if i < len(previous_values) and j < len(previous_values[i]):
-                    prev = previous_values[i][j]
-                if prev:
-                    e.insert(0, prev)
-                elif i == j:
-                    e.configure(bg="#F1FDF2")
-                row_entries.append(e)
-            self.entries.append(row_entries)
+            row_e: List[tk.Entry] = []
+            for j in range(n):
+                diag = (i == j)
+                var = tk.StringVar()
+                e = tk.Entry(self, textvariable=var, width=ew, justify="center",
+                             relief="flat", font=ef,
+                             bg=C["surface2"] if diag else C["surface"],
+                             fg=C["text3"] if diag else C["text"],
+                             disabledbackground=C["surface2"],
+                             highlightthickness=1,
+                             highlightbackground=C["border"],
+                             highlightcolor=C["cyan"],
+                             state="disabled" if diag else "normal")
+                e.grid(row=i+1, column=j+1, padx=1, pady=1, ipady=4)
+                if not diag:
+                    p = prev[i][j] if i < len(prev) and j < len(prev[i]) else ""
+                    if p:
+                        e.insert(0, p)
+                    if self._on_change_cb:
+                        var.trace_add("write", lambda *_, ii=i, jj=j: self._cell_changed(ii, jj))
+                row_e.append(e)
+            self.entries.append(row_e)
 
-    def resize(self, rows: int, cols: int) -> None:
-        self.rows = rows
-        self.cols = cols
-        if len(self.labels) != min(rows, cols):
-            self.labels = [str(i + 1) for i in range(min(rows, cols))]
-        self._build_grid()
+    def _cell_changed(self, i, j):
+        if self._on_change_cb:
+            self.after(300, self._on_change_cb)
 
-    def set_labels(self, labels: List[str]) -> None:
+    def rebuild(self, n, labels):
+        self.n = n
         self.labels = labels[:]
-        self._build_grid()
+        self._build()
 
-    def set_zoom(self, zoom_factor: float) -> None:
-        self.zoom_factor = max(0.7, min(1.8, zoom_factor))
-        self._build_grid()
+    def set_labels(self, labels):
+        self.labels = labels[:]
+        self._build()
 
     def get_matrix(self) -> List[List[Optional[float]]]:
-        values: List[List[Optional[float]]] = []
-        for i in range(self.rows):
-            row: List[Optional[float]] = []
-            for j in range(self.cols):
+        out = []
+        for i in range(self.n):
+            row = []
+            for j in range(self.n):
+                if i == j:
+                    row.append(None)
+                    continue
                 raw = self.entries[i][j].get().strip()
                 if raw == "":
                     row.append(None)
                     continue
                 try:
-                    val = int(raw)
-                    if val < MIN_WEIGHT or val > MAX_WEIGHT:
-                        raise ValueError(
-                            f"Cellule ({i + 1},{j + 1}) : valeur doit être entre {MIN_WEIGHT} et {MAX_WEIGHT}."
-                        )
-                except ValueError as exc:
-                    raise ValueError(
-                        f"Cellule ({i + 1},{j + 1}) invalide : '{raw}'. "
-                        f"Saisissez un entier entre {MIN_WEIGHT} et {MAX_WEIGHT}."
-                    ) from exc
-                row.append(float(val))
-            values.append(row)
-        return values
+                    v = int(raw)
+                    row.append(float(v))
+                except ValueError:
+                    raise ValueError(f"Cellule ({self.labels[i]}→{self.labels[j]}): entier requis, reçu '{raw}'")
+            out.append(row)
+        return out
 
-    def set_from_matrix(self, matrix: List[List[Optional[float]]]) -> None:
-        if not matrix or not matrix[0]:
+    def set_from_matrix(self, m: List[List[Optional[float]]]):
+        if not m:
             return
-        self.resize(len(matrix), len(matrix[0]))
-        for i in range(self.rows):
-            for j in range(self.cols):
+        for i in range(min(self.n, len(m))):
+            for j in range(min(self.n, len(m[i]))):
+                if i == j:
+                    continue
+                v = m[i][j]
                 self.entries[i][j].delete(0, tk.END)
-                v = matrix[i][j]
-                if i == j and (v is None or abs(v) < 1e-9):
-                    continue
-                if v is None:
-                    continue
-                self.entries[i][j].insert(0, _format_number(v))
+                if v is not None:
+                    self.entries[i][j].insert(0, _fmt(v))
 
-# ---------- Canvas pour le graphe ----------
+    def set_edge(self, i, j, value: Optional[float]):
+        if 0 <= i < self.n and 0 <= j < self.n and i != j:
+            self.entries[i][j].delete(0, tk.END)
+            if value is not None:
+                self.entries[i][j].insert(0, _fmt(value))
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Canvas interactif du graphe
+# ═══════════════════════════════════════════════════════════════
 class GraphCanvas(tk.Canvas):
-    def __init__(self, master: tk.Widget) -> None:
-        super().__init__(master, bg=PALETTE["bg"], highlightthickness=1, highlightbackground=PALETTE["line"])
-        self.node_positions: List[Tuple[float, float]] = []
-        self.current_matrix: List[List[Optional[float]]] = []
-        self.current_path: Optional[List[int]] = None
-        self.current_title: str = "Graphe"
-        self.current_labels: List[str] = []
-        self._drag_node_idx: Optional[int] = None
-        self.zoom_factor: float = 1.0
-        self._redraw_pending = False
+    NODE_R = 22
 
-        self.bind("<MouseWheel>", self._on_mousewheel)
-        self.bind("<B1-Motion>", self._drag_node)
+    def __init__(self, parent, on_node_click=None):
+        super().__init__(parent, bg=C["bg"], highlightthickness=0, cursor="arrow")
+        self.n = 0
+        self.labels: List[str] = []
+        self.matrix: List[List[Optional[float]]] = []
+        self.positions: List[Tuple[float, float]] = []
+        self.path: Optional[List[int]] = None
+        self._drag_idx: Optional[int] = None
+        self._zoom = 1.0
+        self._pending = False
+        self._on_node_click = on_node_click
+
+        self.bind("<B1-Motion>", self._on_drag)
         self.bind("<ButtonRelease-1>", self._end_drag)
+        self.bind("<MouseWheel>", lambda e: self.yview_scroll(-1 if e.delta > 0 else 1, "units"))
 
-    def draw_graph(
-        self,
-        matrix: List[List[Optional[float]]],
-        highlighted_path: Optional[List[int]] = None,
-        title: str = "Graphe",
-        preserve_positions: bool = True,
-        node_labels: Optional[List[str]] = None,
-    ) -> None:
-        self.current_matrix = matrix
-        self.current_path = highlighted_path
-        self.current_title = title
-        self.current_labels = node_labels[:] if node_labels else [str(i + 1) for i in range(len(matrix))]
+    def draw(self, matrix, labels, path=None, preserve=True):
+        self.matrix = [row[:] for row in matrix]
+        self.labels = labels[:]
+        self.n = len(matrix)
+        self.path = path
+        if not preserve or len(self.positions) != self.n:
+            self._place_nodes()
+        if not self._pending:
+            self._pending = True
+            self.after(20, self._render)
 
-        if self._redraw_pending:
-            return
-        self._redraw_pending = True
-        self.after(20, self._perform_draw, preserve_positions)
-
-    def _perform_draw(self, preserve_positions: bool) -> None:
-        self.delete("all")
-        n = len(self.current_matrix)
+    def _place_nodes(self):
+        self.update_idletasks()
+        w = max(self.winfo_width(), 500)
+        h = max(self.winfo_height(), 380)
+        cx, cy = w / 2, h / 2
+        n = self.n
         if n == 0:
-            self._redraw_pending = False
+            self.positions = []
+            return
+        if n == 1:
+            self.positions = [(cx, cy)]
+            return
+        rx = min(w * 0.36, max(160, n * 32))
+        ry = min(h * 0.33, max(120, n * 22))
+        self.positions = [
+            (cx + rx * math.cos(2*math.pi*i/n - math.pi/2),
+             cy + ry * math.sin(2*math.pi*i/n - math.pi/2))
+            for i in range(n)
+        ]
+
+    def _render(self):
+        self._pending = False
+        self.delete("all")
+        n = self.n
+        if n == 0:
             return
 
         self.update_idletasks()
-        view_w = max(self.winfo_width(), 500)
-        view_h = max(self.winfo_height(), 400)
-        virtual_w = max(view_w, int(900 * self.zoom_factor), int(n * 140 * self.zoom_factor))
-        virtual_h = max(view_h, int(700 * self.zoom_factor), int(n * 120 * self.zoom_factor))
-        self.configure(scrollregion=(0, 0, virtual_w, virtual_h))
+        vw = max(self.winfo_width(), 500)
+        vh = max(self.winfo_height(), 380)
+        # Garder l'espace canevas en accord avec le contenu
+        self.configure(scrollregion=self.bbox("all") or (0, 0, vw, vh))
 
-        cx, cy = virtual_w / 2, virtual_h / 2
-        radius = min(virtual_w, virtual_h) * 0.35
-        radius = min(radius, max(220, n * 26))
-        node_r = int(max(14, 18 * self.zoom_factor))
+        r = self.NODE_R
+        path_set = set()
+        if self.path and len(self.path) >= 2:
+            for i in range(len(self.path)-1):
+                path_set.add((self.path[i], self.path[i+1]))
 
-        self.create_text(10, 10, anchor="nw", text=self.current_title, fill=PALETTE["text"], font=("Segoe UI", 11, "bold"))
+        pos = self.positions
 
-        if preserve_positions and len(self.node_positions) == n:
-            positions = self.node_positions[:]
-        else:
-            positions = []
-            if n == 1:
-                positions.append((cx, cy))
-            else:
-                rx = min(virtual_w * 0.40, max(220, n * 36))
-                ry = min(virtual_h * 0.24, max(120, n * 14))
-                for i in range(n):
-                    angle = (2 * math.pi * i / n) - (math.pi / 2)
-                    x = cx + rx * math.cos(angle)
-                    y = cy + ry * math.sin(angle)
-                    positions.append((x, y))
-
-        path_edges = set()
-        if self.current_path and len(self.current_path) >= 2:
-            for i in range(len(self.current_path) - 1):
-                path_edges.add((self.current_path[i], self.current_path[i + 1]))
-
-        # Dessin des arcs (non-chemin d'abord)
+        # ── Arcs ─────────────────────────────────────────
         for i in range(n):
             for j in range(n):
-                weight = self.current_matrix[i][j]
-                if weight is None or i == j:
+                w = self.matrix[i][j]
+                if w is None or i == j:
                     continue
-                is_path_edge = (i, j) in path_edges
-                if is_path_edge:
-                    continue
-                x1, y1 = positions[i]
-                x2, y2 = positions[j]
-                self._draw_arrow(x1, y1, x2, y2, node_r, "#7A7A7A", 1.5)
-                mx, my = (x1 + x2) / 2, (y1 + y2) / 2
-                offset_x = (y1 - y2) * 0.03
-                offset_y = (x2 - x1) * 0.03
-                self.create_text(
-                    mx + offset_x,
-                    my + offset_y,
-                    text=_format_number(weight),
-                    fill="#7A7A7A",
-                    font=("Consolas", max(8, int(9 * self.zoom_factor)), "bold"),
-                )
+                ip = (i, j) in path_set
+                x1, y1 = pos[i]
+                x2, y2 = pos[j]
 
-        # Dessin des arcs du chemin
-        for i in range(n):
-            for j in range(n):
-                weight = self.current_matrix[i][j]
-                if weight is None or i == j:
-                    continue
-                is_path_edge = (i, j) in path_edges
-                if not is_path_edge:
-                    continue
-                x1, y1 = positions[i]
-                x2, y2 = positions[j]
-                self._draw_arrow(x1, y1, x2, y2, node_r, PALETTE["path"], 3)
-                mx, my = (x1 + x2) / 2, (y1 + y2) / 2
-                offset_x = (y1 - y2) * 0.03
-                offset_y = (x2 - x1) * 0.03
-                self.create_text(
-                    mx + offset_x,
-                    my + offset_y,
-                    text=_format_number(weight),
-                    fill=PALETTE["path"],
-                    font=("Consolas", max(8, int(9 * self.zoom_factor)), "bold"),
-                )
+                opp = self.matrix[j][i] if j < len(self.matrix) else None
+                curved = (opp is not None)
+                self._draw_arc(x1, y1, x2, y2, r, ip, curved)
 
-        for i, (x, y) in enumerate(positions):
-            fill = PALETTE["primary"] if not self.current_path or i not in self.current_path else PALETTE["path_node"]
-            self.create_oval(
-                x - node_r,
-                y - node_r,
-                x + node_r,
-                y + node_r,
-                fill=fill,
-                outline=PALETTE["primary_dark"],
-                width=2,
-                tags=("node", f"node_{i}"),
-            )
-            txt = self.current_labels[i] if i < len(self.current_labels) else str(i + 1)
-            self.create_text(
-                x,
-                y,
-                text=txt,
-                fill="white",
-                font=("Segoe UI", max(8, int(10 * self.zoom_factor)), "bold"),
-                tags=("node", f"node_{i}"),
-            )
+                mx = (x1+x2)/2 + (y1-y2)*0.12 * (1 if curved else 0.5)
+                my = (y1+y2)/2 + (x2-x1)*0.12 * (1 if curved else 0.5)
+                fc = C["cyan"] if ip else C["text2"]
+                fw = "bold" if ip else "normal"
+                self.create_text(mx, my, text=_fmt(w), fill=fc,
+                                 font=("Segoe UI", 8, fw))
 
-        self.node_positions = positions
+        # ── Nœuds ────────────────────────────────────────
+        for i, (x, y) in enumerate(pos):
+            in_path = self.path and i in self.path
+            fill = C["cyan"] if in_path else C["violet"]
+            out = C["cyan_l"] if in_path else C["violet_l"]
+            self.create_oval(x-r+2, y-r+2, x+r+2, y+r+2,
+                             fill="#E8E8E8", outline="")
+            self.create_oval(x-r, y-r, x+r, y+r,
+                             fill=fill, outline=out, width=2,
+                             tags=("node", f"n{i}"))
+            lbl = self.labels[i] if i < len(self.labels) else str(i+1)
+            self.create_text(x, y, text=lbl, fill=C["white"],
+                             font=("Segoe UI", 9, "bold"),
+                             tags=("node", f"n{i}"))
+            if self.path and i in self.path:
+                order = self.path.index(i)+1
+                self.create_text(x+r-2, y-r+4, text=str(order),
+                                 fill=C["orange"], font=("Segoe UI", 7, "bold"))
+
         self.tag_bind("node", "<ButtonPress-1>", self._start_drag)
-        self._redraw_pending = False
+        self.tag_bind("node", "<Double-Button-1>", self._node_dblclick)
 
-    def _draw_arrow(self, x1: float, y1: float, x2: float, y2: float, node_r: float, color: str, width: float) -> None:
-        dx = x2 - x1
-        dy = y2 - y1
-        dist = math.hypot(dx, dy)
-        if dist < 1e-6:
+    def _draw_arc(self, x1, y1, x2, y2, r, is_path, curved):
+        dx, dy = x2-x1, y2-y1
+        d = math.hypot(dx, dy)
+        if d < 1e-6:
             return
-        ux = dx / dist
-        uy = dy / dist
-        start_x = x1 + ux * node_r
-        start_y = y1 + uy * node_r
-        end_x = x2 - ux * node_r
-        end_y = y2 - uy * node_r
-        self.create_line(
-            start_x,
-            start_y,
-            end_x,
-            end_y,
-            fill=color,
-            width=width,
-            arrow=tk.LAST,
-            arrowshape=(10, 12, 4),
-            smooth=True,
-        )
+        ux, uy = dx/d, dy/d
+        sx, sy = x1 + ux*r, y1 + uy*r
+        ex, ey = x2 - ux*r, y2 - uy*r
 
-    def _start_drag(self, event: tk.Event) -> None:
+        color = C["cyan"] if is_path else C["border"]
+        lw = 2.5 if is_path else 1.5
+
+        if curved:
+            px = (sx+ex)/2 - uy * 28
+            py = (sy+ey)/2 + ux * 28
+            self.create_line(sx, sy, px, py, ex, ey,
+                             fill=color, width=lw, smooth=True,
+                             arrow=tk.LAST, arrowshape=(9, 11, 3))
+        else:
+            self.create_line(sx, sy, ex, ey,
+                             fill=color, width=lw,
+                             arrow=tk.LAST, arrowshape=(9, 11, 3))
+
+    def _start_drag(self, event):
         item = self.find_withtag("current")
         if not item:
             return
-        tags = self.gettags(item[0])
-        for tag in tags:
-            if tag.startswith("node_"):
-                self._drag_node_idx = int(tag.split("_", 1)[1])
+        for t in self.gettags(item[0]):
+            if t.startswith("n") and t[1:].isdigit():
+                self._drag_idx = int(t[1:])
                 self.configure(cursor="fleur")
                 return
 
-    def _drag_node(self, event: tk.Event) -> None:
-        if self._drag_node_idx is None:
+    def _on_drag(self, event):
+        if self._drag_idx is None:
             return
-        x = self.canvasx(event.x)
-        y = self.canvasy(event.y)
-        idx = self._drag_node_idx
-        if 0 <= idx < len(self.node_positions):
-            self.node_positions[idx] = (x, y)
-            self.draw_graph(
-                self.current_matrix,
-                self.current_path,
-                self.current_title,
-                preserve_positions=True,
-                node_labels=self.current_labels,
-            )
+        x, y = self.canvasx(event.x), self.canvasy(event.y)
+        if 0 <= self._drag_idx < len(self.positions):
+            self.positions[self._drag_idx] = (x, y)
+            if not self._pending:
+                self._pending = True
+                self.after(16, self._render)
 
-    def _end_drag(self, _event: tk.Event) -> None:
-        self._drag_node_idx = None
-        self.configure(cursor="")
+    def _end_drag(self, _):
+        self._drag_idx = None
+        self.configure(cursor="arrow")
 
-    def _on_mousewheel(self, event: tk.Event) -> None:
-        delta = -1 if event.delta > 0 else 1
-        if (event.state & 0x0001) != 0:
-            self.xview_scroll(delta, "units")
-        else:
-            self.yview_scroll(delta, "units")
+    def _node_dblclick(self, event):
+        item = self.find_withtag("current")
+        if not item:
+            return
+        for t in self.gettags(item[0]):
+            if t.startswith("n") and t[1:].isdigit():
+                idx = int(t[1:])
+                if self._on_node_click:
+                    self._on_node_click(idx)
+                return
 
-    def set_zoom(self, zoom_factor: float) -> None:
-        self.zoom_factor = max(0.6, min(2.0, zoom_factor))
-        if self.current_matrix:
-            self.draw_graph(
-                self.current_matrix,
-                self.current_path,
-                self.current_title,
-                preserve_positions=False,
-                node_labels=self.current_labels,
-            )
+    def set_zoom(self, z):
+        self._zoom = max(0.5, min(2.5, z))
+        if self.matrix:
+            self.draw(self.matrix, self.labels, self.path, preserve=True)
 
-# ---------- Application principale ----------
-class DemoucronApp(tk.Tk):
-    def __init__(self) -> None:
+
+# ═══════════════════════════════════════════════════════════════
+#  Popup utilitaire
+# ═══════════════════════════════════════════════════════════════
+def popup_base(master, title, w=380, h=None):
+    """Crée une popup centrée sur la fenêtre parent."""
+    p = tk.Toplevel(master)
+    p.title(title)
+    p.transient(master)
+    p.grab_set()
+    p.configure(bg=C["surface"])
+    p.resizable(False, False)
+    
+    if h is None:
+        h = 300
+    p.geometry(f"{w}x{h}")
+    
+    p.update_idletasks()
+    mx = master.winfo_x() + (master.winfo_width() - w) // 2
+    my = master.winfo_y() + (master.winfo_height() - h) // 2
+    p.geometry(f"+{max(0, mx)}+{max(0, my)}")
+    
+    return p
+
+
+def make_field(parent, label, row, var=None, values=None, placeholder=""):
+    """Crée un label + widget d'entrée avec style moderne."""
+    tk.Label(parent, text=label, bg=C["surface"], fg=C["violet"],
+             font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w",
+                                        padx=(0, 14), pady=(10, 6))
+    if var is None:
+        var = tk.StringVar(value=placeholder)
+    if values:
+        w = ttk.Combobox(parent, textvariable=var, state="readonly",
+                         values=values, width=22)
+    else:
+        w = tk.Entry(parent, textvariable=var, width=26,
+                     font=("Segoe UI", 10), relief="flat",
+                     bg=C["surface2"], fg=C["text"],
+                     insertbackground=C["cyan"],
+                     insertwidth=2,
+                     highlightthickness=2,
+                     highlightbackground=C["border"],
+                     highlightcolor=C["cyan"])
+        
+        # Focus effects
+        def on_focus_in(event, w=w):
+            w.config(bg=C["cyan_bg"], highlightbackground=C["cyan"], 
+                    highlightcolor=C["cyan"], highlightthickness=2)
+        
+        def on_focus_out(event, w=w):
+            w.config(bg=C["surface2"], highlightbackground=C["border"],
+                    highlightcolor=C["cyan"], highlightthickness=2)
+        
+        w.bind("<FocusIn>", on_focus_in)
+        w.bind("<FocusOut>", on_focus_out)
+    
+    w.grid(row=row, column=1, sticky="ew", pady=(10, 6), padx=(0, 0))
+    return var, w
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Application principale
+# ═══════════════════════════════════════════════════════════════
+class App(tk.Tk):
+    def __init__(self):
         super().__init__()
-        self.title("Demoucron - Min/Max")
-        self.geometry("1400x860")
-        self.minsize(1200, 760)
-        self.configure(bg=PALETTE["bg"])
+        self.title("Demoucron — Algorithme Min / Max")
+        self.geometry("1500x940")
+        self.minsize(1100, 700)
+        
+        # Icône
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open("algorithme.png")
+            img = img.resize((32, 32), Image.Resampling.LANCZOS)
+            self.ico = ImageTk.PhotoImage(img)
+            self.wm_iconphoto(False, self.ico)
+        except Exception:
+            pass
+        
+        self.tk_setPalette(
+            background=C["bg"],
+            foreground=C["text"],
+            activeBackground=C["violet_l"],
+            activeForeground=C["white"]
+        )
+        self.configure(bg=C["bg"])
 
-        self._setup_icon()
-
-        # Variables d'état
-        self.current_matrix: List[List[Optional[float]]] = []
-        self.node_labels: List[str] = [str(i + 1) for i in range(6)]
-        self.label_to_index: dict[str, int] = {}
-        self.table_zoom: float = 1.0
-        self.graph_zoom: float = 1.0
+        self.n = 0
+        self.labels: List[str] = []
+        self.lbl2i: dict = {}
+        self.matrix: List[List[Optional[float]]] = []
         self.last_result: Optional[DemoucronResult] = None
         self.last_mode: Optional[str] = None
-        self.auto_refresh = tk.BooleanVar(value=False)
-        self._refresh_after_id = None
+        self.src_idx = 0
+        self.dst_idx = 0
+        self._auto_id = None
+        self.auto_on = tk.BooleanVar(value=True)
+        self._last_matrix_hash = None  # Cache pour éviter les redessins inutiles
 
-        # Construction UI
         self._build_ui()
-        self._bind_events()
-        self.after(50, lambda: self.root_canvas.yview_moveto(0.0))
+        self.after(200, self._popup_initial_setup)
 
-    # ---------- Configuration initiale ----------
-    def _setup_icon(self) -> None:
-        app_dir = os.path.dirname(__file__)
-        png_path = os.path.join(app_dir, "algorithme.png")
-        ico_path = os.path.join(app_dir, "algorithme.ico")
-        if os.path.exists(png_path) and not os.path.exists(ico_path):
-            try:
-                from PIL import Image
-                img = Image.open(png_path)
-                if img.mode in ("RGBA", "LA", "P"):
-                    background = Image.new("RGB", img.size, (255, 255, 255))
-                    background.paste(img, mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None)
-                    img = background
-                img.save(ico_path, format="ICO", sizes=[(256, 256), (128, 128), (64, 64), (32, 32), (16, 16)])
-            except Exception:
-                pass
-        if os.path.exists(ico_path):
-            try:
-                self.wm_iconbitmap(ico_path)
-            except Exception:
-                pass
-        if os.path.exists(png_path):
-            try:
-                from PIL import Image, ImageTk
-                img = Image.open(png_path)
-                img.thumbnail((32, 32), Image.Resampling.LANCZOS)
-                self.icon_image = ImageTk.PhotoImage(img)
-                self.wm_iconphoto(False, self.icon_image)
-            except Exception:
-                pass
+    # ══════════════════════════════════════════════════════════
+    #  UI
+    # ══════════════════════════════════════════════════════════
+    def _build_ui(self):
+        self._build_header()
 
-    # ---------- Construction UI ----------
-    def _build_ui(self) -> None:
-        # Header fixe
-        self.fixed_header = tk.Frame(self, bg=PALETTE["bg"])
-        self.fixed_header.pack(side="top", fill="x")
-        self._build_toolbar()
+        # Main body - simple et efficace
+        body = tk.Frame(self, bg=C["bg"])
+        body.pack(fill="both", expand=True)
 
-        # Zone de contenu scrollable
-        content_frame = tk.Frame(self, bg=PALETTE["bg"])
-        content_frame.pack(side="top", fill="both", expand=True)
-        self.root_canvas = tk.Canvas(content_frame, bg=PALETTE["bg"], highlightthickness=0)
-        self.root_scroll_y = tk.Scrollbar(content_frame, orient="vertical", command=self.root_canvas.yview)
-        self.root_canvas.configure(yscrollcommand=self.root_scroll_y.set)
-        self.root_canvas.pack(side="left", fill="both", expand=True)
-        self.root_scroll_y.pack(side="right", fill="y")
+        # Top: Matrice + Graphe côte à côte
+        top = tk.Frame(body, bg=C["bg"])
+        top.pack(fill="both", expand=True, padx=8, pady=8)
+        top.grid_rowconfigure(0, weight=1)
+        top.grid_columnconfigure(0, weight=1)
+        top.grid_columnconfigure(1, weight=2)
 
-        self.page = tk.Frame(self.root_canvas, bg=PALETTE["bg"])
-        self.page_window = self.root_canvas.create_window((0, 0), window=self.page, anchor="nw")
-        self.page.bind("<Configure>", self._on_page_configure)
-        self.root_canvas.bind("<Configure>", self._on_root_canvas_configure)
-        self.root_canvas.bind("<MouseWheel>", self._on_global_mousewheel)
+        # LEFT: Matrice
+        left_frame = tk.Frame(top, bg=C["bg"])
+        left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        self._build_matrix_panel(left_frame)
 
-        # Corps principal
-        body = tk.Frame(self.page, bg=PALETTE["bg"])
-        body.pack(fill="both", expand=True, padx=12, pady=(6, 10))
-        body.grid_rowconfigure(0, weight=1)
-        body.grid_rowconfigure(1, weight=0)
-        body.grid_columnconfigure(0, weight=1)
+        # RIGHT: Graphe
+        right_frame = tk.Frame(top, bg=C["bg"])
+        right_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        self._build_graph_panel(right_frame)
 
-        content = tk.PanedWindow(body, orient=tk.HORIZONTAL, sashrelief=tk.FLAT, bg=PALETTE["bg"], sashwidth=8)
-        content.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
-
-        left = tk.Frame(content, bg=PALETTE["bg"])
-        right = tk.Frame(content, bg=PALETTE["bg"])
-        content.add(left, minsize=360)
-        content.add(right, minsize=700)
-
-        self._build_matrix_panel(left)
-        self._build_graph_panel(right)
+        # BOTTOM: Résultats
         self._build_result_panel(body)
-
-        # Footer fixe
-        self.fixed_footer = tk.Frame(self, bg=PALETTE["bg"], highlightbackground=PALETTE["line"], highlightthickness=1)
-        self.fixed_footer.pack(side="bottom", fill="x")
         self._build_statusbar()
 
-        self._sync_node_selectors(6, regenerate_labels=True)
-        self._adapt_table_view(6, 6)
+    def _build_header(self):
+        hdr = tk.Frame(self, bg=C["violet"])
+        hdr.pack(fill="x")
+        inner = tk.Frame(hdr, bg=C["violet"])
+        inner.pack(fill="x", padx=16, pady=10)
 
-    def _build_toolbar(self) -> None:
-        top = tk.Frame(self.fixed_header, bg=PALETTE["bg"])
-        top.pack(fill="x", padx=16, pady=(10, 8))
-        title = tk.Label(
-            top,
-            text="Algorithme de Demoucron",
-            bg=PALETTE["bg"],
-            fg=PALETTE["primary"],
-            font=("Segoe UI", 20, "bold"),
-        )
-        title.pack(side="left")
-
-        controls = tk.Frame(self.fixed_header, bg=PALETTE["bg"], highlightbackground=PALETTE["line"], highlightthickness=1, relief="flat")
-        controls.pack(fill="x", padx=16, pady=(0, 8))
-
-        tk.Label(controls, text="Lignes", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 9)).grid(row=0, column=0, padx=6, pady=6)
-        self.rows_var = tk.StringVar(value="6")
-        rows_spin = tk.Spinbox(controls, from_=2, to=20, textvariable=self.rows_var, width=4, font=("Segoe UI", 9), bg=PALETTE["bg"], relief="solid", bd=1)
-        rows_spin.grid(row=0, column=1, padx=2, pady=6)
-
-        tk.Label(controls, text="Colonnes", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 9)).grid(row=0, column=2, padx=6, pady=6)
-        self.cols_var = tk.StringVar(value="6")
-        cols_spin = tk.Spinbox(controls, from_=2, to=20, textvariable=self.cols_var, width=4, font=("Segoe UI", 9), bg=PALETTE["bg"], relief="solid", bd=1)
-        cols_spin.grid(row=0, column=3, padx=2, pady=6)
-
-        tk.Label(controls, text="Étiquettes", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 9)).grid(row=0, column=4, padx=(12, 6), pady=6)
-        self.label_mode_var = tk.StringVar(value="Chiffres")
-        self.label_mode_combo = ttk.Combobox(
-            controls,
-            textvariable=self.label_mode_var,
-            width=8,
-            state="readonly",
-            values=["Chiffres", "Lettres"],
-        )
-        self.label_mode_combo.grid(row=0, column=5, padx=2, pady=6)
-
-        tk.Label(controls, text="Source", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 9)).grid(row=0, column=6, padx=(12, 6), pady=6)
-        self.src_var = tk.StringVar(value="1")
-        self.src_combo = ttk.Combobox(controls, textvariable=self.src_var, width=5, state="readonly")
-        self.src_combo.grid(row=0, column=7, padx=2, pady=6)
-
-        tk.Label(controls, text="Destination", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 9)).grid(row=0, column=8, padx=6, pady=6)
-        self.dst_var = tk.StringVar(value="6")
-        self.dst_combo = ttk.Combobox(controls, textvariable=self.dst_var, width=5, state="readonly")
-        self.dst_combo.grid(row=0, column=9, padx=2, pady=6)
-
-        # Boutons
-        self._make_button(controls, "Créer", self.create_table).grid(row=0, column=10, padx=4, pady=6)
-        self._make_button(controls, "Actualiser", self.refresh_all).grid(row=0, column=11, padx=4, pady=6)
-        self._make_button(controls, "Graphe", self.generate_graph).grid(row=0, column=12, padx=4, pady=6)
-        self._make_button(controls, "Min", self.compute_min).grid(row=0, column=13, padx=4, pady=6)
-        self._make_button(controls, "Max", self.compute_max).grid(row=0, column=14, padx=4, pady=6)
-
-        # Case auto-refresh
-        self.auto_check = tk.Checkbutton(
-            controls,
-            text="Auto mise à jour",
-            variable=self.auto_refresh,
-            bg=PALETTE["bg"],
-            fg=PALETTE["text"],
-            selectcolor=PALETTE["bg"],
-            font=("Segoe UI", 8),
-        )
-        self.auto_check.grid(row=0, column=15, padx=8, pady=6)
-
-    def _build_matrix_panel(self, parent: tk.Frame) -> None:
-        left_title = tk.Label(parent, text="Matrice d'adjacence", bg=PALETTE["bg"], fg=PALETTE["primary"], font=("Segoe UI", 12, "bold"))
-        left_title.pack(anchor="w", pady=(0, 8))
-        left_desc = tk.Label(parent, text="Saisissez les poids des arcs", bg=PALETTE["bg"], fg=PALETTE["text_light"], font=("Segoe UI", 9))
-        left_desc.pack(anchor="w", pady=(0, 6))
-
-        table_container = tk.Frame(parent, bg=PALETTE["bg"], relief="flat")
-        table_container.pack(fill="both", expand=True, pady=(0, 8))
-
-        self.table_canvas = tk.Canvas(table_container, bg=PALETTE["bg"], highlightthickness=0)
-        self.table_scroll_y = tk.Scrollbar(table_container, orient="vertical", command=self.table_canvas.yview)
-        self.table_scroll_x = tk.Scrollbar(table_container, orient="horizontal", command=self.table_canvas.xview)
-        self.table_canvas.configure(yscrollcommand=self.table_scroll_y.set, xscrollcommand=self.table_scroll_x.set)
-        self.table_canvas.grid(row=0, column=0, sticky="nsew")
-        self.table_scroll_y.grid(row=0, column=1, sticky="ns")
-        self.table_scroll_x.grid(row=1, column=0, sticky="ew")
-        table_container.grid_rowconfigure(0, weight=1)
-        table_container.grid_columnconfigure(0, weight=1)
-
-        self.table_frame_holder = tk.Frame(self.table_canvas, bg=PALETTE["bg"])
-        self.table_canvas.create_window((0, 0), window=self.table_frame_holder, anchor="nw")
-        self.matrix_editor = MatrixEditor(self.table_frame_holder, 6, 6)
-        self.matrix_editor.pack(anchor="nw", pady=4)
-        self.table_frame_holder.bind("<Configure>", self._on_table_configure)
-
-        table_zoom_frame = tk.Frame(parent, bg=PALETTE["bg"])
-        table_zoom_frame.pack(fill="x", pady=(4, 0))
-        tk.Label(table_zoom_frame, text="Zoom", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 10))
-        self._make_button(table_zoom_frame, "+", self.zoom_table_in).pack(side="left", padx=3)
-        self._make_button(table_zoom_frame, "-", self.zoom_table_out).pack(side="left", padx=3)
-        self._make_button(table_zoom_frame, "100%", self.zoom_table_reset).pack(side="left", padx=4)
-
-        self.info_label = tk.Label(
-            parent,
-            text="Entrez des nombres entiers. Cellule vide = pas d'arc.",
-            bg=PALETTE["bg"],
-            fg=PALETTE["text_light"],
-            justify="left",
-            font=("Segoe UI", 8),
-            wraplength=280,
-        )
-        self.info_label.pack(anchor="w", pady=(10, 0))
-
-    def _build_graph_panel(self, parent: tk.Frame) -> None:
-        right_top = tk.Frame(parent, bg=PALETTE["bg"])
-        right_top.pack(fill="both", expand=True)
-
-        graph_label = tk.Label(right_top, text="Graphe Orienté", bg=PALETTE["bg"], fg=PALETTE["primary"], font=("Segoe UI", 12, "bold"))
-        graph_label.pack(anchor="w", pady=(0, 6))
-        graph_desc = tk.Label(right_top, text="Visualisation et édition du graphe", bg=PALETTE["bg"], fg=PALETTE["text_light"], font=("Segoe UI", 9))
-        graph_desc.pack(anchor="w", pady=(0, 8))
-
-        graph_frame = tk.Frame(right_top, bg=PALETTE["bg"])
-        graph_frame.pack(fill="both", expand=True)
-        self.graph_canvas = GraphCanvas(graph_frame)
-        graph_scroll_y = tk.Scrollbar(graph_frame, orient="vertical", command=self.graph_canvas.yview)
-        graph_scroll_x = tk.Scrollbar(graph_frame, orient="horizontal", command=self.graph_canvas.xview)
-        self.graph_canvas.configure(yscrollcommand=graph_scroll_y.set, xscrollcommand=graph_scroll_x.set)
-        self.graph_canvas.grid(row=0, column=0, sticky="nsew")
-        graph_scroll_y.grid(row=0, column=1, sticky="ns")
-        graph_scroll_x.grid(row=1, column=0, sticky="ew")
-        graph_frame.grid_rowconfigure(0, weight=1)
-        graph_frame.grid_columnconfigure(0, weight=1)
-
-        graph_zoom_frame = tk.Frame(right_top, bg=PALETTE["bg"])
-        graph_zoom_frame.pack(fill="x", pady=(4, 8))
-        tk.Label(graph_zoom_frame, text="Zoom", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 10))
-        self._make_button(graph_zoom_frame, "+", self.zoom_graph_in).pack(side="left", padx=3)
-        self._make_button(graph_zoom_frame, "-", self.zoom_graph_out).pack(side="left", padx=3)
-        self._make_button(graph_zoom_frame, "100%", self.zoom_graph_reset).pack(side="left", padx=3)
-
-        graph_tools = tk.Frame(right_top, bg=PALETTE["panel"], highlightbackground=PALETTE["line"], highlightthickness=1, relief="flat")
-        graph_tools.pack(fill="x", pady=(0, 0))
-        tk.Label(graph_tools, text="Outils d'édition", bg=PALETTE["panel"], fg=PALETTE["primary"], font=("Segoe UI", 10, "bold")).grid(row=0, column=0, columnspan=6, sticky="w", padx=10, pady=(8, 8))
-        self._make_button(graph_tools, "+ Nœud", self.add_vertex_graph).grid(row=1, column=0, padx=6, pady=6)
-        self._make_button(graph_tools, "- Nœud", self.delete_vertex_graph).grid(row=1, column=1, padx=6, pady=6)
-        self._make_button(graph_tools, "Renommer", self.rename_vertex_graph).grid(row=1, column=2, padx=6, pady=6)
-        self._make_button(graph_tools, "+ Arc", self.add_or_edit_edge_graph).grid(row=1, column=3, padx=6, pady=6)
-        self._make_button(graph_tools, "- Arc", self.delete_edge_graph).grid(row=1, column=4, padx=6, pady=6)
-
-    def _build_result_panel(self, parent: tk.Frame) -> None:
-        bottom = tk.Frame(parent, bg=PALETTE["bg"])
-        bottom.grid(row=1, column=0, sticky="nsew")
-        result_panel = tk.Frame(bottom, bg=PALETTE["panel"], highlightbackground=PALETTE["line"], highlightthickness=1, relief="flat")
-        result_panel.pack(side="left", fill="both", expand=True, padx=(0, 8))
-        tk.Label(result_panel, text="Résultat", bg=PALETTE["panel"], fg=PALETTE["primary"], font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=12, pady=(10, 6))
-        self.result_text = tk.Label(result_panel, text="Aucun calcul lancé.", bg=PALETTE["panel"], fg=PALETTE["text"], justify="left", font=("Segoe UI", 10))
-        self.result_text.pack(anchor="w", padx=12, pady=(0, 12))
-
-        steps_panel = tk.Frame(bottom, bg=PALETTE["panel"], highlightbackground=PALETTE["line"], highlightthickness=1, relief="flat")
-        steps_panel.pack(side="left", fill="both", expand=True, padx=(8, 0))
-        tk.Label(steps_panel, text="Étapes de Calcul", bg=PALETTE["panel"], fg=PALETTE["primary"], font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=12, pady=(10, 6))
-        self.steps_text = ScrolledText(steps_panel, wrap="none", height=18, font=("Consolas", 9), relief="flat", bg=PALETTE["bg"], fg=PALETTE["text"], insertbackground=PALETTE["primary"])
-        self.steps_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        self.steps_text.configure(state="disabled")
-
-    def _build_statusbar(self) -> None:
-        footer_content = tk.Frame(self.fixed_footer, bg=PALETTE["bg"])
-        footer_content.pack(fill="x", padx=16, pady=6)
-        self.status_label = tk.Label(footer_content, text="Prêt", bg=PALETTE["bg"], fg=PALETTE["text_secondary"], font=("Segoe UI", 8))
-        self.status_label.pack(side="left")
-        tk.Label(footer_content, text="@ 2026 Demoucron Algorithm Suite", bg=PALETTE["bg"], fg=PALETTE["text_light"], font=("Segoe UI", 8)).pack(side="right")
-
-    # ---------- Événements et liaisons ----------
-    def _bind_events(self) -> None:
-        self.rows_var.trace_add("write", lambda *_: self._schedule_refresh())
-        self.cols_var.trace_add("write", lambda *_: self._schedule_refresh())
-        self.label_mode_combo.bind("<<ComboboxSelected>>", self.on_label_mode_change)
-        self.src_combo.bind("<<ComboboxSelected>>", lambda e: self._update_path_display())
-        self.dst_combo.bind("<<ComboboxSelected>>", lambda e: self._update_path_display())
-        # Mise à jour auto sur changement de cellule si activé
-        self.matrix_editor.bind("<FocusOut>", lambda e: self._on_matrix_edit())
-
-    def _schedule_refresh(self) -> None:
-        if self.auto_refresh.get():
-            if self._refresh_after_id:
-                self.after_cancel(self._refresh_after_id)
-            self._refresh_after_id = self.after(500, self.refresh_all)
-
-    def _on_matrix_edit(self) -> None:
-        if self.auto_refresh.get():
-            self._schedule_refresh()
-
-    def _update_path_display(self) -> None:
-        if self.last_mode and self.last_result:
-            if self.last_mode == "min":
-                self.compute_min(show_message=False)
-            else:
-                self.compute_max(show_message=False)
-
-    # ---------- Méthodes utilitaires ----------
-    def _make_button(self, master: tk.Widget, text: str, command) -> tk.Button:
-        return AnimatedButton(master, text=text, command=command)
-
-    def _center_popup(self, popup: tk.Toplevel) -> None:
-        popup.update_idletasks()
-        root_x = self.winfo_rootx()
-        root_y = self.winfo_rooty()
-        root_w = self.winfo_width()
-        root_h = self.winfo_height()
-        w = popup.winfo_reqwidth()
-        h = popup.winfo_reqheight()
-        x = root_x + max(0, (root_w - w) // 2)
-        y = root_y + max(0, (root_h - h) // 2)
-        popup.geometry(f"+{x}+{y}")
-
-    def _on_page_configure(self, _event: tk.Event) -> None:
-        self.root_canvas.configure(scrollregion=self.root_canvas.bbox("all"))
-
-    def _on_root_canvas_configure(self, event: tk.Event) -> None:
-        self.root_canvas.itemconfigure(self.page_window, width=event.width)
-
-    def _on_global_mousewheel(self, event: tk.Event) -> None:
-        self.root_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
-
-    def _on_table_configure(self, _event: tk.Event) -> None:
-        self.table_canvas.configure(scrollregion=self.table_canvas.bbox("all"))
-
-    def _adapt_table_view(self, rows: int, cols: int) -> None:
-        zoom = self.table_zoom
-        if max(rows, cols) <= 8:
-            width = int((90 + cols * 84) * zoom)
-            width = min(width, 620)
-            height = int((70 + rows * 34) * zoom)
-            self.table_canvas.configure(width=width, height=height)
-        else:
-            self.table_canvas.configure(width=int(420 * zoom), height=int(380 * zoom))
-
-    def _default_label(self, index: int) -> str:
-        return _alpha_label(index) if self.label_mode_var.get() == "Lettres" else str(index + 1)
-
-    def _fit_labels_to_size(self, n: int, regenerate: bool) -> None:
-        if regenerate or not self.node_labels:
-            self.node_labels = [self._default_label(i) for i in range(n)]
-            return
-        if len(self.node_labels) > n:
-            self.node_labels = self.node_labels[:n]
-        elif len(self.node_labels) < n:
-            start = len(self.node_labels)
-            self.node_labels.extend(self._default_label(i) for i in range(start, n))
-
-    def _sync_node_selectors(self, n: int, regenerate_labels: bool = False) -> None:
-        self._fit_labels_to_size(n, regenerate_labels)
-        values = self.node_labels[:]
-        self.label_to_index = {label: idx for idx, label in enumerate(values)}
-        self.matrix_editor.set_labels(self.node_labels)
-        self.src_combo["values"] = values
-        self.dst_combo["values"] = values
-        if values:
-            if self.src_var.get() not in values:
-                self.src_var.set(values[0])
-            if self.dst_var.get() not in values:
-                self.dst_var.set(values[-1])
-
-    def _ensure_square_from_table(self) -> bool:
+        # Icône PNG si disponible
+        tf = tk.Frame(inner, bg=C["violet"])
+        tf.pack(side="left")
         try:
-            self.current_matrix = self.matrix_editor.get_matrix()
-            return True
-        except ValueError as exc:
-            messagebox.showerror("Erreur", str(exc))
-            return False
+            from PIL import Image, ImageTk
+            img = Image.open("algorithme.png")
+            img = img.resize((40, 40), Image.Resampling.LANCZOS)
+            self.logo_img = ImageTk.PhotoImage(img)
+            tk.Label(tf, image=self.logo_img, bg=C["violet"]).pack(side="left", padx=8)
+        except Exception:
+            pass
+        
+        tk.Label(tf, text="Demoucron", bg=C["violet"], fg=C["white"],
+                 font=("Segoe UI", 24, "bold")).pack(side="left")
 
-    def _set_result(self, text: str, is_error: bool = False) -> None:
-        """Affiche un résultat ou une erreur dans le panneau résultat."""
-        if is_error:
-            self.result_text.configure(text=f"⚠️ {text}", fg=PALETTE["error_fg"])
-            self.status_label.configure(text=f"Erreur : {text[:60]}", fg=PALETTE["error_fg"])
-            self.after(3000, lambda: self.status_label.configure(fg=PALETTE["text_secondary"]))
-        else:
-            self.result_text.configure(text=text, fg=PALETTE["text"])
-            self.status_label.configure(text=text[:80], fg=PALETTE["text_secondary"])
+        bf = tk.Frame(inner, bg=C["violet"])
+        bf.pack(side="left", padx=30)
 
-    def _set_steps(self, text: str) -> None:
-        self.steps_text.configure(state="normal")
-        self.steps_text.delete("1.0", tk.END)
-        self.steps_text.insert(tk.END, text)
-        self.steps_text.configure(state="disabled")
+        self._hbtns = []
+        for txt, cmd, style in [
+            ("⊞  Nouveau graphe", self._new_graph, "cyan"),
+            ("⟳  Synchroniser", self._graph_to_matrix, "ghost"),
+            ("▼  MIN", self._do_min, "warn"),
+            ("▲  MAX", self._do_max, "ghost"),
+            ("↺  Réinitialiser", self._reset, "danger"),
+        ]:
+            b = ModernBtn(bf, txt, cmd, style)
+            b.pack(side="left", padx=4)
+            self._hbtns.append(b)
 
-    def _format_steps(self, result: DemoucronResult, mode: str) -> str:
-        lines = [f"Mode: {mode}", "Les matrices Dk incluent D0 (initiale), puis D1..Dn après itération."]
+        rf = tk.Frame(inner, bg=C["violet"])
+        rf.pack(side="right")
+        self.ind = tk.Label(rf, text="●", bg=C["violet"],
+                            fg=C["cyan"], font=("Segoe UI", 12))
+        self.ind.pack(side="right", padx=4)
+        cb = tk.Checkbutton(rf, text="Auto-refresh",
+                            variable=self.auto_on,
+                            bg=C["violet"], fg=C["white"],
+                            selectcolor=C["violet_l"],
+                            activebackground=C["violet"],
+                            activeforeground=C["white"],
+                            font=("Segoe UI", 9), cursor="hand2",
+                            command=self._toggle_auto)
+        cb.pack(side="right")
+
+    def _build_matrix_panel(self, p):
+        p.columnconfigure(0, weight=1)
+        p.rowconfigure(1, weight=1)
+        
+        tk.Label(p, text="Matrice d'adjacence",
+                 bg=C["bg"], fg=C["violet"],
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 4))
+        tk.Label(p, text="Cellule vide = pas d'arc  ·  entier signé",
+                 bg=C["bg"], fg=C["text3"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 6))
+
+        card = tk.Frame(p, bg=C["surface"],
+                        highlightbackground=C["border"], highlightthickness=1,
+                        height=350)
+        card.pack(fill="both", expand=True)
+
+        self.tcvs = tk.Canvas(card, bg=C["surface"], highlightthickness=0)
+        tsy = tk.Scrollbar(card, orient="vertical", command=self.tcvs.yview)
+        tsx = tk.Scrollbar(card, orient="horizontal", command=self.tcvs.xview)
+        self.tcvs.configure(yscrollcommand=tsy.set, xscrollcommand=tsx.set)
+        self.tcvs.grid(row=0, column=0, sticky="nsew")
+        tsy.grid(row=0, column=1, sticky="ns")
+        tsx.grid(row=1, column=0, sticky="ew")
+        card.grid_rowconfigure(0, weight=1)
+        card.grid_columnconfigure(0, weight=1)
+
+        self.tholder = tk.Frame(self.tcvs, bg=C["surface"])
+        self.tcvs.create_window((0, 0), window=self.tholder, anchor="nw")
+        self.me = MatrixEditor(self.tholder, 4, ["A", "B", "C", "D"])
+        self.me.pack(padx=8, pady=8)
+        self.me.set_change_callback(self._on_matrix_edit)
+        self.tholder.bind("<Configure>", lambda e: self.tcvs.configure(
+            scrollregion=self.tcvs.bbox("all")))
+
+        bf = tk.Frame(p, bg=C["bg"])
+        bf.pack(fill="x", pady=(6, 0))
+        ModernBtn(bf, "Matrice → Graphe", self._matrix_to_graph, "primary").pack(side="left", padx=2)
+        ModernBtn(bf, "+ Arc", self._add_edge, "cyan").pack(side="left", padx=2)
+        ModernBtn(bf, "− Arc", self._del_edge, "ghost").pack(side="left", padx=2)
+
+    def _build_graph_panel(self, p):
+        p.columnconfigure(0, weight=1)
+        p.rowconfigure(1, weight=1)
+        
+        tk.Label(p, text="Graphe orienté",
+                 bg=C["bg"], fg=C["violet"],
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 4))
+        tk.Label(p, text="Drag = déplacer  ·  Double-clic = modifier sommet",
+                 bg=C["bg"], fg=C["text3"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 6))
+
+        gcard = tk.Frame(p, bg=C["surface"],
+                         highlightbackground=C["border"], highlightthickness=1,
+                         height=350)
+        gcard.pack(fill="both", expand=True)
+
+        self.gc = GraphCanvas(gcard, on_node_click=self._graph_node_dblclick)
+        gsy = tk.Scrollbar(gcard, orient="vertical", command=self.gc.yview)
+        gsx = tk.Scrollbar(gcard, orient="horizontal", command=self.gc.xview)
+        self.gc.configure(yscrollcommand=gsy.set, xscrollcommand=gsx.set)
+        self.gc.grid(row=0, column=0, sticky="nsew")
+        gsy.grid(row=0, column=1, sticky="ns")
+        gsx.grid(row=1, column=0, sticky="ew")
+        gcard.grid_rowconfigure(0, weight=1)
+        gcard.grid_columnconfigure(0, weight=1)
+
+        bf = tk.Frame(p, bg=C["bg"])
+        bf.pack(fill="x", pady=(6, 0))
+        ModernBtn(bf, "+ Sommet", self._add_vertex, "primary").pack(side="left", padx=2)
+        ModernBtn(bf, "− Sommet", self._del_vertex, "ghost").pack(side="left", padx=2)
+        ModernBtn(bf, "✎ Modifier sommet", self._edit_vertex, "ghost").pack(side="left", padx=2)
+        tk.Frame(bf, bg=C["border"], width=1, height=20).pack(side="left", padx=8)
+        ModernBtn(bf, "+ Arc", self._add_edge, "cyan").pack(side="left", padx=2)
+        ModernBtn(bf, "✎ Modifier arc", self._edit_edge, "ghost").pack(side="left", padx=2)
+        ModernBtn(bf, "− Arc", self._del_edge, "ghost").pack(side="left", padx=2)
+
+        zf = tk.Frame(p, bg=C["bg"])
+        zf.pack(fill="x", pady=(4, 0))
+        tk.Label(zf, text="Zoom :", bg=C["bg"], fg=C["text3"],
+                 font=("Segoe UI", 8)).pack(side="left", padx=(0, 4))
+        ModernBtn(zf, "+", lambda: self.gc.set_zoom(self.gc._zoom + 0.1), "ghost").pack(side="left", padx=2)
+        ModernBtn(zf, "−", lambda: self.gc.set_zoom(self.gc._zoom - 0.1), "ghost").pack(side="left", padx=2)
+        ModernBtn(zf, "100%", lambda: self.gc.set_zoom(1.0), "ghost").pack(side="left", padx=2)
+
+    def _build_result_panel(self, parent):
+        rs = tk.Frame(parent, bg=C["bg"])
+        rs.pack(fill="both", expand=True, padx=10, pady=(8, 0))
+
+        rp = tk.Frame(rs, bg=C["surface"],
+                      highlightbackground=C["border"], highlightthickness=1)
+        rp.pack(side="left", fill="both", expand=True, padx=(0, 5))
+
+        tk.Frame(rp, bg=C["cyan"], height=3).pack(fill="x")
+        rph = tk.Frame(rp, bg=C["surface"])
+        rph.pack(fill="x", padx=12, pady=(8, 4))
+        tk.Label(rph, text="Résultat & Chemin optimal",
+                 bg=C["surface"], fg=C["violet"],
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
+
+        rf = tk.Frame(rp, bg=C["surface"])
+        rf.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        self.res_lbl = tk.Label(rf, text="Aucun calcul lancé.",
+                                bg=C["surface"], fg=C["text3"],
+                                font=("Segoe UI", 10), justify="left",
+                                wraplength=370)
+        self.res_lbl.pack(anchor="w")
+        self.path_frame = tk.Frame(rf, bg=C["surface"])
+        self.path_frame.pack(fill="x", pady=(6, 0))
+
+        sdf = tk.Frame(rp, bg=C["surface2"])
+        sdf.pack(fill="x", padx=12, pady=(0, 8))
+        tk.Label(sdf, text="Source :", bg=C["surface2"], fg=C["text2"],
+                 font=("Segoe UI", 9)).grid(row=0, column=0, padx=4, pady=4)
+        self.src_var = tk.StringVar(value="")
+        self.src_cb = ttk.Combobox(sdf, textvariable=self.src_var,
+                                   width=8, state="readonly")
+        self.src_cb.grid(row=0, column=1, padx=4, pady=4)
+        tk.Label(sdf, text="→  Dest :", bg=C["surface2"], fg=C["text2"],
+                 font=("Segoe UI", 9)).grid(row=0, column=2, padx=4, pady=4)
+        self.dst_var = tk.StringVar(value="")
+        self.dst_cb = ttk.Combobox(sdf, textvariable=self.dst_var,
+                                   width=8, state="readonly")
+        self.dst_cb.grid(row=0, column=3, padx=4, pady=4)
+        self.src_cb.bind("<<ComboboxSelected>>", lambda e: self._repath())
+        self.dst_cb.bind("<<ComboboxSelected>>", lambda e: self._repath())
+
+        sp = tk.Frame(rs, bg=C["surface"],
+                      highlightbackground=C["border"], highlightthickness=1)
+        sp.pack(side="left", fill="both", expand=True, padx=(5, 0))
+
+        tk.Frame(sp, bg=C["cyan"], height=3).pack(fill="x")
+        header_frame = tk.Frame(sp, bg=C["surface"])
+        header_frame.pack(fill="x", padx=12, pady=(8, 4))
+        tk.Label(header_frame, text="Matrices Dk  ( ∞ = pas de chemin  ·  / = diagonale )",
+                 bg=C["surface"], fg=C["violet"],
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w", side="left", fill="x", expand=True)
+
+        # Créer un canvas scrollable pour le contenu des matrices
+        steps_container = tk.Frame(sp, bg=C["surface"], highlightthickness=0)
+        steps_container.pack(fill="both", expand=True, padx=0, pady=0)
+
+        self.steps_canvas = tk.Canvas(steps_container, bg=C["bg"], 
+                                      highlightthickness=0, relief="flat")
+        steps_scrollbar = tk.Scrollbar(steps_container, orient="vertical", 
+                                      command=self.steps_canvas.yview)
+        self.steps_scrollable_frame = tk.Frame(self.steps_canvas, bg=C["bg"])
+        
+        self.steps_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.steps_canvas.configure(scrollregion=self.steps_canvas.bbox("all"))
+        )
+        
+        self.steps_canvas.create_window((0, 0), window=self.steps_scrollable_frame, anchor="nw")
+        self.steps_canvas.configure(yscrollcommand=steps_scrollbar.set)
+        self.steps_canvas.grid(row=0, column=0, sticky="nsew")
+        steps_scrollbar.grid(row=0, column=1, sticky="ns")
+        
+        steps_container.grid_rowconfigure(0, weight=1)
+        steps_container.grid_columnconfigure(0, weight=1)
+        
+        # Créer le ScrolledText dans le frame scrollable
+        self.steps_txt = ScrolledText(self.steps_scrollable_frame, wrap="none", 
+                                      height=11,
+                                      font=("Consolas", 9), relief="flat",
+                                      bg=C["bg"], fg=C["text"],
+                                      insertbackground=C["cyan"])
+        self.steps_txt.pack(fill="both", expand=True, padx=8, pady=8)
+        self.steps_txt.configure(state="disabled")
+
+    def _build_statusbar(self):
+        sb = tk.Frame(self, bg=C["violet_l"])
+        sb.pack(side="bottom", fill="x")
+        i = tk.Frame(sb, bg=C["violet_l"])
+        i.pack(fill="x", padx=12, pady=4)
+        self.st_dot = tk.Label(i, text="●", bg=C["violet_l"],
+                               fg=C["cyan"], font=("Segoe UI", 9))
+        self.st_dot.pack(side="left")
+        self.st_lbl = tk.Label(i, text="Prêt", bg=C["violet_l"],
+                               fg=C["white"], font=("Segoe UI", 8))
+        self.st_lbl.pack(side="left", padx=6)
+        tk.Label(i, text="Charte graphique Data Terra 2020 — Demoucron Min/Max",
+                 bg=C["violet_l"], fg=C["cyan"],
+                 font=("Segoe UI", 8)).pack(side="right")
+
+    # ══════════════════════════════════════════════════════════
+    #  Popup initial
+    # ══════════════════════════════════════════════════════════
+    def _popup_initial_setup(self):
+        """Popup au démarrage pour configurer le graphe."""
+        p = popup_base(self, "Configuration initiale", w=480, h=420)
+
+        # Top bar avec icône
+        top = tk.Frame(p, bg=C["cyan"], height=60)
+        top.pack(fill="x", side="top")
+        top_inner = tk.Frame(top, bg=C["cyan"])
+        top_inner.pack(fill="both", expand=True, padx=20, pady=12)
+        
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open("algorithme.png")
+            img = img.resize((48, 48), Image.Resampling.LANCZOS)
+            self.popup_logo = ImageTk.PhotoImage(img)
+            tk.Label(top_inner, image=self.popup_logo, bg=C["cyan"]).pack(side="left", padx=12)
+        except Exception:
+            pass
+        
+        txt_frame = tk.Frame(top_inner, bg=C["cyan"])
+        txt_frame.pack(side="left", fill="both", expand=True)
+        tk.Label(txt_frame, text="Configuration Demoucron",
+                 bg=C["cyan"], fg=C["white"],
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        tk.Label(txt_frame, text="Définissez les paramètres de votre graphe",
+                 bg=C["cyan"], fg=C["cyan_l"],
+                 font=("Segoe UI", 9)).pack(anchor="w")
+
+        c = tk.Frame(p, bg=C["surface"], padx=20, pady=18)
+        c.pack(fill="both", expand=True)
+
+        tk.Label(c, text="Paramètres du graphe",
+                 bg=C["surface"], fg=C["violet"],
+                 font=("Segoe UI", 11, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 14))
+
+        c.columnconfigure(1, weight=1)
+
+        n_var, _ = make_field(c, "Nombre de sommets :", 2, placeholder="4")
+        
+        type_opts = ["Chiffres (1,2,3…)", "Lettres (A,B,C…)", "Préfixe personnalisé (X1,X2…)"]
+        type_var, _ = make_field(c, "Type de labels :", 3, values=type_opts)
+        type_var.set(type_opts[0])
+        
+        pfx_var, pfx_e = make_field(c, "Préfixe (si applicable) :", 4, placeholder="X")
+        pfx_e.configure(state="disabled")
+
+        def _on_type(*_):
+            t = type_var.get()
+            pfx_e.configure(state="normal" if "personnalisé" in t else "disabled")
+        type_var.trace_add("write", _on_type)
+
+        def submit():
+            try:
+                nv = int(n_var.get())
+                if not (2 <= nv <= 20):
+                    messagebox.showerror("Erreur", "Entre 2 et 20 sommets.", parent=p)
+                    return
+            except ValueError:
+                messagebox.showerror("Erreur", "Nombre entier requis.", parent=p)
+                return
+
+            t = type_var.get()
+            pfx = pfx_var.get().strip() or "X"
+            
+            if "Lettre" in t:
+                mode = "alpha"
+            elif "personnalisé" in t:
+                mode = "prefix"
+            else:
+                mode = "num"
+
+            self.n = nv
+            self.labels = _make_labels(nv, mode, pfx)
+            self.lbl2i = {l: i for i, l in enumerate(self.labels)}
+            self.matrix = [[None]*nv for _ in range(nv)]
+            self.src_idx = 0
+            self.dst_idx = nv - 1
+            self.last_result = None
+            self.last_mode = None
+            
+            self.me.rebuild(nv, self.labels)
+            self._sync_selectors()
+            self.gc.positions = []
+            self.gc.draw(self.matrix, self.labels, preserve=False)
+            self._clear_res()
+            self._set_steps("")
+            self._status(f"Graphe créé : {nv} sommets")
+            self._start_auto()
+            
+            p.destroy()
+
+        # Footer avec boutons
+        footer = tk.Frame(p, bg=C["border"], height=2)
+        footer.pack(fill="x", side="bottom")
+        
+        btn_frame = tk.Frame(p, bg=C["surface2"])
+        btn_frame.pack(fill="x", side="bottom", padx=16, pady=12)
+        
+        ModernBtn(btn_frame, "✓ Commencer", submit, "primary").pack(side="right", padx=4)
+        ModernBtn(btn_frame, "✕ Annuler", lambda: p.destroy(), "ghost").pack(side="right", padx=4)
+
+        p.wait_window()
+
+    # ══════════════════════════════════════════════════════════
+    #  Init & helpers
+    # ══════════════════════════════════════════════════════════
+    def _sync_selectors(self):
+        self.lbl2i = {l: i for i, l in enumerate(self.labels)}
+        vals = self.labels[:]
+        self.src_cb["values"] = vals
+        self.dst_cb["values"] = vals
+        if self.src_var.get() not in vals:
+            self.src_var.set(vals[0] if vals else "")
+        if self.dst_var.get() not in vals:
+            self.dst_var.set(vals[-1] if vals else "")
+
+    def _status(self, msg, ok=True):
+        self.st_dot.configure(fg=C["cyan"] if ok else C["orange"])
+        self.st_lbl.configure(text=msg[:120])
+        self.after(5000, lambda: self.st_lbl.configure(text="Prêt"))
+
+    # ══════════════════════════════════════════════════════════
+    #  Auto-refresh
+    # ══════════════════════════════════════════════════════════
+    def _start_auto(self):
+        if self._auto_id:
+            self.after_cancel(self._auto_id)
+        self._auto_tick()
+
+    def _auto_tick(self):
+        if self.auto_on.get():
+            self._do_auto()
+        self._auto_id = self.after(1000, self._auto_tick)
+
+    def _do_auto(self):
+        try:
+            m = self.me.get_matrix()
+            # Calculer le hash pour détecter les changements
+            m_hash = str(m)
+            if m_hash == self._last_matrix_hash:
+                # Rien n'a changé, pas besoin de redessiner
+                return
+            self._last_matrix_hash = m_hash
+            
+            self.matrix = m
+            self.gc.draw(m, self.labels, self.gc.path, preserve=True)
+            if self.last_mode:
+                self._compute(self.last_mode, show=False)
+            self._pulse()
+        except Exception:
+            pass
+
+    def _pulse(self):
+        self.ind.configure(fg=C["orange"])
+        self.after(200, lambda: self.ind.configure(
+            fg=C["cyan"] if self.auto_on.get() else C["text3"]))
+
+    def _toggle_auto(self):
+        self.ind.configure(fg=C["cyan"] if self.auto_on.get() else C["text3"])
+
+    def _on_matrix_edit(self):
+        self._last_matrix_hash = None  # Invalider le cache
+        if self.auto_on.get():
+            self._do_auto()
+
+    # ══════════════════════════════════════════════════════════
+    #  Actions boutons header
+    # ══════════════════════════════════════════════════════════
+    def _new_graph(self):
+        """Popup de création : nb sommets + type de label."""
+        self._popup_initial_setup()
+
+    def _graph_to_matrix(self):
+        """Redessine la matrice depuis le graphe courant."""
+        self.me.set_from_matrix(self.matrix)
+        self._status("Graphe → Matrice synchronisé.")
+
+    def _matrix_to_graph(self):
+        try:
+            m = self.me.get_matrix()
+            self.matrix = m
+            self._last_matrix_hash = None  # Invalider le cache
+            self.gc.draw(m, self.labels, preserve=True)
+            self._status("Matrice → Graphe synchronisé.")
+        except ValueError as ex:
+            messagebox.showerror("Erreur matrice", str(ex))
+
+    def _do_min(self):
+        self._last_matrix_hash = None  # Invalider le cache après MIN
+        self._compute("min", show=True)
+
+    def _do_max(self):
+        self._last_matrix_hash = None  # Invalider le cache après MAX
+        self._compute("max", show=True)
+
+    def _reset(self):
+        if not messagebox.askyesno("Réinitialiser",
+                                   "Effacer tout et repartir à zéro ?"):
+            return
+        self._popup_initial_setup()
+
+    # ══════════════════════════════════════════════════════════
+    #  Calcul
+    # ══════════════════════════════════════════════════════════
+    def _repath(self):
+        if self.last_mode:
+            self._compute(self.last_mode, show=False)
+
+    def _compute(self, mode, show=True):
+        try:
+            m = self.me.get_matrix()
+            self.matrix = m
+            sl = self.src_var.get()
+            dl = self.dst_var.get()
+            if sl not in self.lbl2i or dl not in self.lbl2i:
+                if show:
+                    messagebox.showerror("Erreur", "Source/Destination invalide.")
+                return
+            s, d = self.lbl2i[sl], self.lbl2i[dl]
+
+            result = (demoucron_min(m, detect_negative_cycles=True) if mode == "min"
+                      else demoucron_max(m, detect_positive_cycles=True))
+            path = build_path(result.next_node, s, d)
+            value = result.values[s][d]
+
+            self.last_result = result
+            self.last_mode = mode
+
+            self.gc.draw(m, self.labels, path, preserve=True)
+
+            if mode == "min" and result.negative_cycle_detected:
+                self._show_err("Cycle négatif — distances non définies")
+            elif mode == "max" and result.positive_cycle_detected:
+                self._show_err("Cycle positif — valeur arbitrairement grande")
+            elif not path:
+                self.res_lbl.configure(
+                    text=f"Aucun chemin {mode.upper()} de {sl} vers {dl}.",
+                    fg=C["text3"])
+                for w in self.path_frame.winfo_children():
+                    w.destroy()
+            else:
+                self._show_path(path, value, sl, dl, mode, m)
+
+            self._set_steps(self._fmt_steps(result, mode.upper()))
+
+        except Exception as ex:
+            if show:
+                messagebox.showerror(f"Erreur {mode.upper()}", str(ex))
+
+    # ══════════════════════════════════════════════════════════
+    #  Affichage résultat
+    # ══════════════════════════════════════════════════════════
+    def _clear_res(self):
+        self.res_lbl.configure(text="Aucun calcul.", fg=C["text3"])
+        for w in self.path_frame.winfo_children():
+            w.destroy()
+
+    def _show_err(self, msg):
+        self.res_lbl.configure(text=f"⚠  {msg}", fg=C["red"])
+        for w in self.path_frame.winfo_children():
+            w.destroy()
+
+    def _show_path(self, path, value, sl, dl, mode, m):
+        icon = "▼" if mode == "min" else "▲"
+        label = "MIN" if mode == "min" else "MAX"
+        cost = "Coût minimal" if mode == "min" else "Valeur maximale"
+        vs = _fmt(value)
+
+        self.res_lbl.configure(
+            text=f"{icon} {label}  {sl} → {dl}   |   {cost} : {vs}   "
+                 f"({len(path)} sommets, {len(path)-1} arcs)",
+            fg=C["violet"])
+
+        for w in self.path_frame.winfo_children():
+            w.destroy()
+
+        bubble_row = tk.Frame(self.path_frame, bg=C["surface"])
+        bubble_row.pack(fill="x", pady=(4, 0))
+
+        for idx, ni in enumerate(path):
+            lbl = self.labels[ni] if ni < len(self.labels) else str(ni+1)
+            col = C["cyan"] if mode == "min" else C["violet"]
+            tk.Label(bubble_row, text=f" {lbl} ", bg=col, fg=C["white"],
+                     font=("Segoe UI", 10, "bold"),
+                     relief="flat", padx=6, pady=4).pack(side="left", padx=1)
+            if idx < len(path)-1:
+                nxt = path[idx+1]
+                w = m[ni][nxt]
+                ws = _fmt(w) if w is not None else "?"
+                tk.Label(bubble_row, text=f" —{ws}→ ", bg=C["surface"],
+                         fg=C["text2"], font=("Consolas", 9)).pack(side="left")
+
+        detail = tk.Frame(self.path_frame,
+                          bg=C["cyan_bg"],
+                          highlightbackground=C["cyan"],
+                          highlightthickness=1)
+        detail.pack(fill="x", pady=(8, 0))
+
+        tk.Label(detail, text="Détail étape par étape",
+                 bg=C["cyan_bg"], fg=C["violet"],
+                 font=("Segoe UI", 9, "bold")).grid(
+            row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(8, 4))
+
+        headers = ["Étape", "De", "Vers", "Poids"]
+        for ci, h in enumerate(headers):
+            tk.Label(detail, text=h, bg=C["cyan"],
+                     fg=C["white"], font=("Segoe UI", 8, "bold"),
+                     padx=8, pady=3).grid(row=1, column=ci, sticky="nsew",
+                                          padx=1, pady=1)
+
+        cumul = 0.0
+        for step, (i, j) in enumerate(zip(path[:-1], path[1:])):
+            la = self.labels[i] if i < len(self.labels) else str(i+1)
+            lb = self.labels[j] if j < len(self.labels) else str(j+1)
+            w = m[i][j]
+            ws = _fmt(w) if w is not None else "?"
+            if w is not None:
+                cumul += w
+            bg_row = C["surface"] if step % 2 == 0 else C["cyan_bg"]
+            for ci, txt in enumerate([str(step+1), la, lb, ws]):
+                tk.Label(detail, text=txt, bg=bg_row, fg=C["text"],
+                         font=("Consolas", 9), padx=8, pady=3).grid(
+                    row=step+2, column=ci, sticky="nsew", padx=1, pady=0)
+
+        r_tot = len(path) + 1
+        for ci, txt in enumerate(["Total", "", "", vs]):
+            tk.Label(detail, text=txt, bg=C["violet"], fg=C["white"],
+                     font=("Segoe UI", 9, "bold"), padx=8, pady=4).grid(
+                row=r_tot, column=ci, sticky="nsew", padx=1, pady=(2, 8))
+
+    def _fmt_steps(self, result: DemoucronResult, mode: str) -> str:
+        lines = [f"Mode : {mode}  |  D0 = initiale  ·  Dk = après itération k\n"]
         if result.negative_cycle_detected:
-            lines.append("⚠️ Cycle négatif détecté ! Les distances peuvent être incorrectes.")
+            lines.append("⚠ Cycle négatif !\n")
         if result.positive_cycle_detected:
-            lines.append("⚠️ Cycle positif détecté ! Les valeurs peuvent être infinies.")
-        lines.append("")
-        for idx, matrix in enumerate(result.history):
-            lines.append(f"D{idx}")
-            for i, row in enumerate(matrix):
-                formatted = []
-                for j, val in enumerate(row):
+            lines.append("⚠ Cycle positif !\n")
+        n = len(result.history[0]) if result.history else 0
+        cw = max(6, max((len(l) for l in self.labels), default=2) + 2)
+
+        for idx, mat in enumerate(result.history):
+            lines.append(f"  ── D{idx} ──")
+            hdr = "      " + "".join(
+                (self.labels[j] if j < len(self.labels) else str(j+1)).center(cw)
+                for j in range(n))
+            lines.append(hdr)
+            lines.append("      " + "─" * (cw * n))
+            for i in range(n):
+                rl = (self.labels[i] if i < len(self.labels) else str(i+1)).ljust(5)
+                cells = []
+                for j in range(n):
                     if i == j:
-                        formatted.append(" inf")
-                        continue
-                    if val == float("inf"):
-                        formatted.append(" inf")
+                        c = "/"
                     else:
-                        formatted.append(f"{_format_number(val):>4}")
-                lines.append(" ".join(formatted))
+                        v = mat[i][j]
+                        c = INF_STR if v == float("inf") else (f"-{INF_STR}" if v == float("-inf") else _fmt(v))
+                    cells.append(c.center(cw))
+                lines.append(f"  {rl} │" + "│".join(cells))
             lines.append("")
         return "\n".join(lines)
 
-    # ---------- Actions utilisateur ----------
-    def create_table(self) -> None:
-        try:
-            rows = int(self.rows_var.get())
-            cols = int(self.cols_var.get())
-            if rows < 2 or rows > 20 or cols < 2 or cols > 20:
-                raise ValueError("Lignes/colonnes doivent être entre 2 et 20.")
-            self.matrix_editor.resize(rows, cols)
-            self._adapt_table_view(rows, cols)
-            self._sync_node_selectors(min(rows, cols), regenerate_labels=True)
-            self.current_matrix = []
-            self.last_result = None
-            self.last_mode = None
-            self._set_result("Tableau recréé.")
-            self._set_steps("Les étapes apparaîtront ici après calcul MIN ou MAX.")
-        except ValueError as exc:
-            messagebox.showerror("Erreur", str(exc))
+    def _set_steps(self, text):
+        self.steps_txt.configure(state="normal")
+        self.steps_txt.delete("1.0", tk.END)
+        if text:
+            self.steps_txt.insert(tk.END, text)
+        self.steps_txt.configure(state="disabled")
 
-    def refresh_all(self) -> None:
-        try:
-            self.current_matrix = self.matrix_editor.get_matrix()
-            n = len(self.current_matrix)
-            self._sync_node_selectors(n)
-            self._adapt_table_view(n, n)
-            self.generate_graph(show_message=False)
-            if self.last_mode == "min":
-                self.compute_min(show_message=False)
-            elif self.last_mode == "max":
-                self.compute_max(show_message=False)
-            else:
-                self._set_result("Matrice mise à jour.")
-        except ValueError as exc:
-            messagebox.showerror("Erreur de matrice", str(exc))
+    # ══════════════════════════════════════════════════════════
+    #  Édition graphe — sommets
+    # ══════════════════════════════════════════════════════════
+    def _add_vertex(self):
+        if self.n >= 20:
+            messagebox.showwarning("Limite", "Maximum 20 sommets.")
+            return
+        new_i = self.n
+        if self.labels and self.labels[0][0].isalpha() and len(self.labels[0]) == 1:
+            new_lbl = _alpha(new_i)
+        elif self.labels and len(self.labels[0]) > 1:
+            pfx = ''.join(c for c in self.labels[0] if c.isalpha())
+            new_lbl = f"{pfx}{new_i+1}"
+        else:
+            new_lbl = str(new_i + 1)
 
-    def generate_graph(self, show_message: bool = True) -> None:
-        try:
-            self.current_matrix = self.matrix_editor.get_matrix()
-            self.graph_canvas.draw_graph(self.current_matrix, None, "Graphe courant", node_labels=self.node_labels)
-            if show_message:
-                self._set_result("Graphe généré. Lancez MIN ou MAX pour voir le chemin optimal.")
-        except ValueError as exc:
-            messagebox.showerror("Erreur de matrice", str(exc))
+        p = popup_base(self, "Ajouter un sommet", w=380, h=210)
+        c = tk.Frame(p, bg=C["surface"], padx=20, pady=16)
+        c.pack(fill="both", expand=True)
+        tk.Frame(p, bg=C["cyan"], height=4).place(x=0, y=0, relwidth=1)
+        tk.Label(c, text="Ajouter un sommet",
+                 bg=C["surface"], fg=C["violet"],
+                 font=("Segoe UI", 13, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(8, 14))
+        c.columnconfigure(1, weight=1)
+        lv, _ = make_field(c, "Nom du sommet :", 1, placeholder=new_lbl)
 
-    def compute_min(self, show_message: bool = True) -> None:
-        try:
-            self.current_matrix = self.matrix_editor.get_matrix()
-            n = len(self.current_matrix)
-            src_label = self.src_var.get().strip()
-            dst_label = self.dst_var.get().strip()
-            if src_label not in self.label_to_index or dst_label not in self.label_to_index:
-                raise ValueError("Source/Destination invalides.")
-            src = self.label_to_index[src_label]
-            dst = self.label_to_index[dst_label]
-            result = demoucron_min(self.current_matrix, detect_negative_cycles=True)
-            path = build_path(result.next_node, src, dst)
-            value = result.values[src][dst]
-
-            self.last_result = result
-            self.last_mode = "min"
-
-            title = f"Graphe - Chemin MIN ({src_label} -> {dst_label})"
-            self.graph_canvas.draw_graph(self.current_matrix, path, title, node_labels=self.node_labels)
-
-            if result.negative_cycle_detected:
-                self._set_result("⚠️ Cycle négatif détecté ! Les distances minimales ne sont pas définies.", is_error=True)
-            elif not path:
-                self._set_result(f"MIN : aucun chemin de {src_label} vers {dst_label}.")
-            else:
-                self._set_result(f"MIN {src_label}→{dst_label} | Coût optimal : {_format_number(value)}\nChemin : {' -> '.join(self.node_labels[i] for i in path)}")
-            self._set_steps(self._format_steps(result, "MIN"))
-            if show_message:
-                self.info_label.configure(text="MIN calculé. Chemin surligné en bleu.")
-        except Exception as exc:
-            messagebox.showerror("Erreur MIN", str(exc))
-
-    def compute_max(self, show_message: bool = True) -> None:
-        try:
-            self.current_matrix = self.matrix_editor.get_matrix()
-            n = len(self.current_matrix)
-            src_label = self.src_var.get().strip()
-            dst_label = self.dst_var.get().strip()
-            if src_label not in self.label_to_index or dst_label not in self.label_to_index:
-                raise ValueError("Source/Destination invalides.")
-            src = self.label_to_index[src_label]
-            dst = self.label_to_index[dst_label]
-            result = demoucron_max(self.current_matrix, detect_positive_cycles=True)
-            path = build_path(result.next_node, src, dst)
-            value = result.values[src][dst]
-
-            self.last_result = result
-            self.last_mode = "max"
-
-            title = f"Graphe - Chemin MAX ({src_label} -> {dst_label})"
-            self.graph_canvas.draw_graph(self.current_matrix, path, title, node_labels=self.node_labels)
-
-            if result.positive_cycle_detected:
-                self._set_result("⚠️ Cycle positif détecté ! La valeur peut être arbitrairement grande.", is_error=True)
-            elif not path:
-                self._set_result(f"MAX : aucun chemin de {src_label} vers {dst_label}.")
-            else:
-                self._set_result(f"MAX {src_label}→{dst_label} | Valeur optimale : {_format_number(value)}\nChemin : {' -> '.join(self.node_labels[i] for i in path)}")
-            self._set_steps(self._format_steps(result, "MAX"))
-            if show_message:
-                self.info_label.configure(text="MAX calculé. Chemin surligné en bleu.")
-        except Exception as exc:
-            messagebox.showerror("Erreur MAX", str(exc))
-
-    def on_label_mode_change(self, _event: tk.Event | None = None) -> None:
-        try:
-            matrix = self.matrix_editor.get_matrix()
-            n = len(matrix)
-        except Exception:
-            n = min(self.matrix_editor.rows, self.matrix_editor.cols)
-        self._sync_node_selectors(n, regenerate_labels=True)
-        self.generate_graph(show_message=False)
-
-    # Zoom table
-    def zoom_table_in(self) -> None:
-        self.table_zoom = min(1.8, self.table_zoom + 0.1)
-        self.matrix_editor.set_zoom(self.table_zoom)
-        self._adapt_table_view(self.matrix_editor.rows, self.matrix_editor.cols)
-        self._on_table_configure(None)
-
-    def zoom_table_out(self) -> None:
-        self.table_zoom = max(0.7, self.table_zoom - 0.1)
-        self.matrix_editor.set_zoom(self.table_zoom)
-        self._adapt_table_view(self.matrix_editor.rows, self.matrix_editor.cols)
-        self._on_table_configure(None)
-
-    def zoom_table_reset(self) -> None:
-        self.table_zoom = 1.0
-        self.matrix_editor.set_zoom(self.table_zoom)
-        self._adapt_table_view(self.matrix_editor.rows, self.matrix_editor.cols)
-        self._on_table_configure(None)
-
-    # Zoom graph
-    def zoom_graph_in(self) -> None:
-        self.graph_zoom = min(2.0, self.graph_zoom + 0.1)
-        self.graph_canvas.set_zoom(self.graph_zoom)
-
-    def zoom_graph_out(self) -> None:
-        self.graph_zoom = max(0.6, self.graph_zoom - 0.1)
-        self.graph_canvas.set_zoom(self.graph_zoom)
-
-    def zoom_graph_reset(self) -> None:
-        self.graph_zoom = 1.0
-        self.graph_canvas.set_zoom(self.graph_zoom)
-
-    # Édition graphe
-    def add_vertex_graph(self) -> None:
-        try:
-            self.current_matrix = self.matrix_editor.get_matrix()
-            n = len(self.current_matrix)
-            for row in self.current_matrix:
+        def submit():
+            lbl = lv.get().strip()
+            if not lbl:
+                messagebox.showerror("Erreur", "Nom vide.", parent=p)
+                return
+            if lbl in self.lbl2i:
+                messagebox.showerror("Erreur", "Ce nom existe déjà.", parent=p)
+                return
+            for row in self.matrix:
                 row.append(None)
-            new_row = [None] * (n + 1)
-            self.current_matrix.append(new_row)
-            self.node_labels.append(self._default_label(n))
-            self._sync_node_selectors(len(self.current_matrix), regenerate_labels=False)
-            self.matrix_editor.set_from_matrix(self.current_matrix)
-            self.generate_graph(show_message=False)
-            self._set_result(f"Sommet {self.node_labels[-1]} ajouté.")
-        except ValueError as exc:
-            messagebox.showerror("Erreur", str(exc))
+            self.matrix.append([None] * (self.n + 1))
+            self.labels.append(lbl)
+            self.n += 1
+            self.me.rebuild(self.n, self.labels)
+            self._sync_selectors()
+            # Mettre à jour la destination au nouveau sommet
+            self.dst_var.set(lbl)
+            self._last_matrix_hash = None  # Invalider le cache
+            self.gc.draw(self.matrix, self.labels, preserve=True)
+            self._status(f"Sommet {lbl} ajouté.")
+            p.destroy()
 
-    def delete_vertex_graph(self) -> None:
-        try:
-            self.current_matrix = self.matrix_editor.get_matrix()
-            n = len(self.current_matrix)
-            if n <= 2:
-                messagebox.showwarning("Suppression impossible", "Il faut conserver au moins 2 sommets.")
+        af = tk.Frame(c, bg=C["surface"])
+        af.grid(row=3, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ModernBtn(af, "Annuler", p.destroy, "ghost").pack(side="right", padx=(4, 0))
+        ModernBtn(af, "✓ Ajouter", submit, "primary").pack(side="right")
+        p.wait_window()
+
+    def _del_vertex(self):
+        p = popup_base(self, "Supprimer un sommet", w=380, h=230)
+        c = tk.Frame(p, bg=C["surface"], padx=20, pady=16)
+        c.pack(fill="both", expand=True)
+        tk.Frame(p, bg=C["red"], height=4).place(x=0, y=0, relwidth=1)
+        tk.Label(c, text="Supprimer un sommet",
+                 bg=C["surface"], fg=C["red"],
+                 font=("Segoe UI", 13, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(8, 14))
+        c.columnconfigure(1, weight=1)
+        lv, _ = make_field(c, "Sommet à supprimer :", 1, values=self.labels)
+        lv.set(self.labels[-1] if self.labels else "")
+
+        def submit():
+            lbl = lv.get().strip()
+            if lbl not in self.lbl2i:
+                messagebox.showerror("Erreur", "Sommet inconnu.", parent=p)
                 return
-            target_label = self.src_var.get().strip()
-            if target_label not in self.label_to_index:
-                messagebox.showerror("Erreur", "Sélectionnez un sommet valide dans Source.")
+            if self.n <= 2:
+                messagebox.showwarning("Impossible", "Minimum 2 sommets.", parent=p)
                 return
-            idx = self.label_to_index[target_label]
-            self.current_matrix.pop(idx)
-            for row in self.current_matrix:
-                row.pop(idx)
-            if idx < len(self.node_labels):
-                self.node_labels.pop(idx)
-            self._sync_node_selectors(len(self.current_matrix), regenerate_labels=False)
-            self.matrix_editor.set_from_matrix(self.current_matrix)
-            self.generate_graph(show_message=False)
-            self._set_result(f"Sommet {target_label} supprimé.")
-        except ValueError as exc:
-            messagebox.showerror("Erreur", str(exc))
+            idx = self.lbl2i[lbl]
+            self.matrix.pop(idx)
+            for row in self.matrix:
+                if len(row) > idx:
+                    row.pop(idx)
+            self.labels.pop(idx)
+            self.n -= 1
+            self.me.rebuild(self.n, self.labels)
+            self._sync_selectors()
+            self._last_matrix_hash = None  # Invalider le cache
+            if idx < len(self.gc.positions):
+                self.gc.positions.pop(idx)
+            self.gc.draw(self.matrix, self.labels, preserve=True)
+            self._status(f"Sommet {lbl} supprimé.")
+            p.destroy()
 
-    def rename_vertex_graph(self) -> None:
-        try:
-            self.current_matrix = self.matrix_editor.get_matrix()
-            old_label = self.src_var.get().strip()
-            if old_label not in self.label_to_index:
-                messagebox.showerror("Erreur", "Sélectionnez un sommet valide dans Source.")
+        af = tk.Frame(c, bg=C["surface"])
+        af.grid(row=3, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ModernBtn(af, "Annuler", p.destroy, "ghost").pack(side="right", padx=(4, 0))
+        ModernBtn(af, "✕ Supprimer", submit, "danger").pack(side="right")
+        p.wait_window()
+
+    def _edit_vertex(self, idx=None):
+        p = popup_base(self, "Modifier un sommet", w=400, h=260)
+        c = tk.Frame(p, bg=C["surface"], padx=20, pady=16)
+        c.pack(fill="both", expand=True)
+        tk.Frame(p, bg=C["cyan"], height=4).place(x=0, y=0, relwidth=1)
+        tk.Label(c, text="Modifier un sommet",
+                 bg=C["surface"], fg=C["violet"],
+                 font=("Segoe UI", 13, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(8, 14))
+        c.columnconfigure(1, weight=1)
+        default = self.labels[idx] if idx is not None else self.labels[0]
+        sv, _ = make_field(c, "Sommet :", 1, values=self.labels)
+        sv.set(default)
+        nv, _ = make_field(c, "Nouveau nom :", 2, placeholder=default)
+
+        def submit():
+            old = sv.get().strip()
+            new = nv.get().strip()
+            if old not in self.lbl2i:
+                messagebox.showerror("Erreur", "Sommet inconnu.", parent=p)
                 return
-            idx = self.label_to_index[old_label]
-            new_label = simpledialog.askstring("Renommer sommet", f"Nouveau nom pour {old_label}:", parent=self)
-            if new_label is None:
+            if not new:
+                messagebox.showerror("Erreur", "Nom vide.", parent=p)
                 return
-            new_label = new_label.strip()
-            if not new_label:
-                messagebox.showerror("Erreur", "Le label ne peut pas être vide.")
+            if new != old and new in self.lbl2i:
+                messagebox.showerror("Erreur", "Nom déjà utilisé.", parent=p)
                 return
-            if new_label in self.label_to_index and new_label != old_label:
-                messagebox.showerror("Erreur", "Ce label existe déjà.")
-                return
-            self.node_labels[idx] = new_label
-            self._sync_node_selectors(len(self.current_matrix), regenerate_labels=False)
-            self.matrix_editor.set_from_matrix(self.current_matrix)
-            self.generate_graph(show_message=False)
-            self._set_result(f"Sommet {old_label} renommé en {new_label}.")
-        except ValueError as exc:
-            messagebox.showerror("Erreur", str(exc))
+            oi = self.lbl2i[old]
+            self.labels[oi] = new
+            self.me.set_labels(self.labels)
+            self._sync_selectors()
+            self._last_matrix_hash = None  # Invalider le cache
+            self.gc.draw(self.matrix, self.labels, preserve=True)
+            self._status(f"Sommet {old} → {new}")
+            p.destroy()
 
-    def add_or_edit_edge_graph(self) -> None:
-        try:
-            self.current_matrix = self.matrix_editor.get_matrix()
-            payload = self._edge_popup()
-            if payload is None:
-                return
-            src_label, dst_label, weight = payload
-            src = self.label_to_index[src_label]
-            dst = self.label_to_index[dst_label]
-            if weight is None:
-                self.current_matrix[src][dst] = None
-            else:
-                self.current_matrix[src][dst] = float(weight)
-            self.matrix_editor.set_from_matrix(self.current_matrix)
-            self.generate_graph(show_message=False)
-            self._set_result(f"Arc {src_label} → {dst_label} mis à jour.")
-        except ValueError as exc:
-            messagebox.showerror("Erreur", str(exc))
+        af = tk.Frame(c, bg=C["surface"])
+        af.grid(row=4, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ModernBtn(af, "Annuler", p.destroy, "ghost").pack(side="right", padx=(4, 0))
+        ModernBtn(af, "✓ Modifier", submit, "primary").pack(side="right")
+        p.wait_window()
 
-    def delete_edge_graph(self) -> None:
-        try:
-            self.current_matrix = self.matrix_editor.get_matrix()
-            payload = self._edge_delete_popup()
-            if payload is None:
-                return
-            src_label, dst_label = payload
-            src = self.label_to_index[src_label]
-            dst = self.label_to_index[dst_label]
-            self.current_matrix[src][dst] = None
-            self.matrix_editor.set_from_matrix(self.current_matrix)
-            self.generate_graph(show_message=False)
-            self._set_result(f"Arc {src_label} → {dst_label} supprimé.")
-        except ValueError as exc:
-            messagebox.showerror("Erreur", str(exc))
+    def _graph_node_dblclick(self, idx):
+        self._edit_vertex(idx)
 
-    # Boîtes de dialogue pour les arcs
-    def _edge_popup(self) -> Optional[Tuple[str, str, Optional[int]]]:
-        if not self.node_labels:
-            return None
-        popup = tk.Toplevel(self)
-        popup.title("Créer ou modifier un arc")
-        popup.transient(self)
-        popup.grab_set()
-        popup.configure(bg=PALETTE["bg"])
-        popup.resizable(False, False)
-        popup.geometry("380x280")
+    # ══════════════════════════════════════════════════════════
+    #  Édition graphe — arcs
+    # ══════════════════════════════════════════════════════════
+    def _arc_popup(self, title, bar_color, confirm_text, confirm_style,
+                   with_weight=True):
+        """Popup générique pour créer/modifier/supprimer un arc."""
+        p = popup_base(self, title, w=410, h=290 if with_weight else 250)
+        c = tk.Frame(p, bg=C["surface"], padx=20, pady=16)
+        c.pack(fill="both", expand=True)
+        tk.Frame(p, bg=bar_color, height=4).place(x=0, y=0, relwidth=1)
+        tk.Label(c, text=title, bg=C["surface"], fg=C["violet"],
+                 font=("Segoe UI", 13, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(8, 14))
+        c.columnconfigure(1, weight=1)
+        sv, _ = make_field(c, "De :", 1, values=self.labels)
+        sv.set(self.src_var.get() if self.src_var.get() in self.labels else self.labels[0])
+        dv, _ = make_field(c, "Vers :", 2, values=self.labels)
+        dv.set(self.dst_var.get() if self.dst_var.get() in self.labels else self.labels[-1])
+        wv = None
+        info_lbl = tk.Label(c, text="", bg=C["surface"], fg=C["text3"],
+                            font=("Segoe UI", 8))
+        info_lbl.grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
-        container = tk.Frame(popup, bg=PALETTE["bg"], padx=16, pady=12)
-        container.pack(fill="both", expand=True)
-        tk.Label(container, text="Créer ou modifier un arc", bg=PALETTE["bg"], fg=PALETTE["primary"], font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 12))
-
-        tk.Label(container, text="Départ", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 4))
-        src_var = tk.StringVar(value=self.src_var.get() if self.src_var.get() in self.node_labels else self.node_labels[0])
-        src_box = ttk.Combobox(container, textvariable=src_var, state="readonly", values=self.node_labels, width=25)
-        src_box.pack(anchor="w", pady=(0, 10), fill="x")
-
-        tk.Label(container, text="Arrivée", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 4))
-        dst_var = tk.StringVar(value=self.dst_var.get() if self.dst_var.get() in self.node_labels else self.node_labels[-1])
-        dst_box = ttk.Combobox(container, textvariable=dst_var, state="readonly", values=self.node_labels, width=25)
-        dst_box.pack(anchor="w", pady=(0, 10), fill="x")
-
-        tk.Label(container, text="Poids (nombre entier)", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 4))
-        weight_var = tk.StringVar(value="")
-        weight_entry = tk.Entry(container, textvariable=weight_var, width=25, justify="center", font=("Consolas", 10), relief="solid", bd=1)
-        weight_entry.pack(anchor="w", pady=(0, 4), fill="x")
-
-        info_lbl = tk.Label(container, text="Laissez vide pour supprimer l'arc", bg=PALETTE["bg"], fg=PALETTE["text_light"], font=("Segoe UI", 8))
-        info_lbl.pack(anchor="w", pady=(0, 10))
-
-        if src_var.get() in self.label_to_index and dst_var.get() in self.label_to_index and self.current_matrix:
-            s = self.label_to_index[src_var.get()]
-            d = self.label_to_index[dst_var.get()]
-            current = self.current_matrix[s][d]
-            if current is not None:
-                weight_var.set(str(int(current)) if abs(current - round(current)) < 1e-9 else "")
-
-        result: dict[str, Optional[Tuple[str, str, Optional[int]]]] = {"value": None}
-
-        def submit() -> None:
-            src_label = src_var.get().strip()
-            dst_label = dst_var.get().strip()
-            raw = weight_var.get().strip()
-            if src_label not in self.label_to_index or dst_label not in self.label_to_index:
-                messagebox.showerror("Erreur", "Sélection départ/arrivée invalide.", parent=popup)
-                return
-            if raw == "":
-                result["value"] = (src_label, dst_label, None)
-                popup.destroy()
-                return
-            try:
-                w = int(raw)
-                if w < MIN_WEIGHT or w > MAX_WEIGHT:
-                    messagebox.showerror("Erreur", f"Le poids doit être compris entre {MIN_WEIGHT} et {MAX_WEIGHT}.", parent=popup)
+        if with_weight:
+            wv, _ = make_field(c, "Poids (entier) :", 4)
+            def prefill(*_):
+                s = sv.get()
+                d = dv.get()
+                if s == d:
+                    info_lbl.configure(text="⚠ Boucle non autorisée")
+                    if wv:
+                        wv.set("")
                     return
-            except ValueError:
-                messagebox.showerror("Erreur", "Le poids doit contenir uniquement des chiffres entiers.", parent=popup)
+                info_lbl.configure(text="")
+                if s in self.lbl2i and d in self.lbl2i:
+                    si, di = self.lbl2i[s], self.lbl2i[d]
+                    v = self.matrix[si][di]
+                    if wv:
+                        wv.set(_fmt(v) if v is not None else "")
+            sv.trace_add("write", prefill)
+            dv.trace_add("write", prefill)
+            prefill()
+        else:
+            def prefill(*_):
+                s = sv.get()
+                d = dv.get()
+                if s == d:
+                    info_lbl.configure(text="⚠ Boucle non autorisée")
+                else:
+                    info_lbl.configure(text="")
+            sv.trace_add("write", prefill)
+            dv.trace_add("write", prefill)
+
+        result = {"v": None}
+        def submit():
+            s = sv.get().strip()
+            d = dv.get().strip()
+            if s == d:
+                messagebox.showerror("Erreur", "Boucle i→i non autorisée.", parent=p)
                 return
-            result["value"] = (src_label, dst_label, w)
-            popup.destroy()
-
-        actions = tk.Frame(container, bg=PALETTE["bg"])
-        actions.pack(fill="x", pady=(8, 0))
-        cancel_btn = tk.Button(actions, text="Annuler", command=popup.destroy, relief="solid", bd=1, bg=PALETTE["line"], fg=PALETTE["text"], padx=12, pady=6, font=("Segoe UI", 10, "bold"))
-        cancel_btn.pack(side="right", padx=(4, 0))
-        validate_btn = AnimatedButton(actions, text="Valider", command=submit)
-        validate_btn.pack(side="right", padx=4)
-
-        self._center_popup(popup)
-        popup.wait_window()
-        return result["value"]
-
-    def _edge_delete_popup(self) -> Optional[Tuple[str, str]]:
-        if not self.node_labels:
-            return None
-        popup = tk.Toplevel(self)
-        popup.title("Supprimer un arc")
-        popup.transient(self)
-        popup.grab_set()
-        popup.configure(bg=PALETTE["bg"])
-        popup.resizable(False, False)
-        popup.geometry("330x220")
-
-        container = tk.Frame(popup, bg=PALETTE["bg"], padx=16, pady=12)
-        container.pack(fill="both", expand=True)
-        tk.Label(container, text="Sélectionner l'arc à supprimer", bg=PALETTE["bg"], fg=PALETTE["primary"], font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 12))
-
-        tk.Label(container, text="Départ", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 4))
-        src_var = tk.StringVar(value=self.src_var.get() if self.src_var.get() in self.node_labels else self.node_labels[0])
-        src_box = ttk.Combobox(container, textvariable=src_var, state="readonly", values=self.node_labels, width=22)
-        src_box.pack(anchor="w", pady=(0, 10), fill="x")
-
-        tk.Label(container, text="Arrivée", bg=PALETTE["bg"], fg=PALETTE["text"], font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 4))
-        dst_var = tk.StringVar(value=self.dst_var.get() if self.dst_var.get() in self.node_labels else self.node_labels[-1])
-        dst_box = ttk.Combobox(container, textvariable=dst_var, state="readonly", values=self.node_labels, width=22)
-        dst_box.pack(anchor="w", pady=(0, 14), fill="x")
-
-        result: dict[str, Optional[Tuple[str, str]]] = {"value": None}
-
-        def submit() -> None:
-            src_label = src_var.get().strip()
-            dst_label = dst_var.get().strip()
-            if src_label not in self.label_to_index or dst_label not in self.label_to_index:
-                messagebox.showerror("Erreur", "Sélection départ/arrivée invalide.", parent=popup)
+            if s not in self.lbl2i or d not in self.lbl2i:
+                messagebox.showerror("Erreur", "Sommet invalide.", parent=p)
                 return
-            result["value"] = (src_label, dst_label)
-            popup.destroy()
+            if with_weight:
+                raw = wv.get().strip() if wv else ""
+                if raw == "":
+                    result["v"] = (s, d, None)
+                else:
+                    try:
+                        result["v"] = (s, d, int(raw))
+                    except ValueError:
+                        messagebox.showerror("Erreur", "Entier requis.", parent=p)
+                        return
+            else:
+                result["v"] = (s, d)
+            p.destroy()
 
-        actions = tk.Frame(container, bg=PALETTE["bg"])
-        actions.pack(fill="x")
-        cancel_btn = tk.Button(actions, text="Annuler", command=popup.destroy, relief="solid", bd=1, bg=PALETTE["line"], fg=PALETTE["text"], padx=12, pady=6, font=("Segoe UI", 10, "bold"))
-        cancel_btn.pack(side="right", padx=(4, 0))
-        delete_btn = AnimatedButton(actions, text="Supprimer", command=submit)
-        delete_btn.pack(side="right", padx=4)
+        af = tk.Frame(c, bg=C["surface"])
+        row_af = 6 if with_weight else 4
+        af.grid(row=row_af, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ModernBtn(af, "Annuler", p.destroy, "ghost").pack(side="right", padx=(4, 0))
+        ModernBtn(af, confirm_text, submit, confirm_style).pack(side="right")
+        p.wait_window()
+        return result["v"]
 
-        self._center_popup(popup)
-        popup.wait_window()
-        return result["value"]
+    def _add_edge(self):
+        res = self._arc_popup("Ajouter un arc", C["cyan"], "✓ Ajouter", "cyan")
+        if res is None:
+            return
+        sl, dl, w = res
+        si, di = self.lbl2i[sl], self.lbl2i[dl]
+        self.matrix[si][di] = float(w) if w is not None else None
+        self.me.set_edge(si, di, self.matrix[si][di])
+        self._last_matrix_hash = None  # Invalider le cache
+        self.gc.draw(self.matrix, self.labels, self.gc.path, preserve=True)
+        self._status(f"Arc {sl}→{dl} = {w}")
 
-# ---------- Point d'entrée ----------
-def main() -> None:
-    app = DemoucronApp()
+    def _edit_edge(self):
+        res = self._arc_popup("Modifier un arc", C["violet"], "✓ Modifier", "primary")
+        if res is None:
+            return
+        sl, dl, w = res
+        si, di = self.lbl2i[sl], self.lbl2i[dl]
+        self.matrix[si][di] = float(w) if w is not None else None
+        self.me.set_edge(si, di, self.matrix[si][di])
+        self._last_matrix_hash = None  # Invalider le cache
+        self.gc.draw(self.matrix, self.labels, self.gc.path, preserve=True)
+        self._status(f"Arc {sl}→{dl} modifié.")
+
+    def _del_edge(self):
+        res = self._arc_popup("Supprimer un arc", C["red"], "✕ Supprimer", "danger",
+                              with_weight=False)
+        if res is None:
+            return
+        sl, dl = res
+        si, di = self.lbl2i[sl], self.lbl2i[dl]
+        self.matrix[si][di] = None
+        self.me.set_edge(si, di, None)
+        self._last_matrix_hash = None  # Invalider le cache
+        self.gc.draw(self.matrix, self.labels, self.gc.path, preserve=True)
+        self._status(f"Arc {sl}→{dl} supprimé.")
+
+
+# ═══════════════════════════════════════════════════════════════
+def main():
+    app = App()
     app.mainloop()
+
 
 if __name__ == "__main__":
     main()
