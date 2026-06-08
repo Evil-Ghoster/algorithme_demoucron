@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import tkinter as tk
 from tkinter import messagebox, ttk
-from tkinter.scrolledtext import ScrolledText
 from typing import List, Optional, Tuple
 
 from demoucron import DemoucronResult, build_path, demoucron_max, demoucron_min
@@ -519,12 +518,36 @@ class App(tk.Tk):
     def _build_ui(self):
         self._build_header()
 
-        # Main body - simple et efficace
-        body = tk.Frame(self, bg=C["bg"])
-        body.pack(fill="both", expand=True)
+        # Main body avec scroll global
+        body_container = tk.Frame(self, bg=C["bg"])
+        body_container.pack(fill="both", expand=True)
+        
+        # Canvas pour scroller le contenu
+        main_canvas = tk.Canvas(body_container, bg=C["bg"], highlightthickness=0)
+        scrollbar = tk.Scrollbar(body_container, orient="vertical", command=main_canvas.yview)
+        scrollable_frame = tk.Frame(main_canvas, bg=C["bg"])
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all"))
+        )
+        
+        main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        main_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Mousewheel scroll
+        def _on_mousewheel(event):
+            main_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        main_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        main_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        body_container.grid_rowconfigure(0, weight=1)
+        body_container.grid_columnconfigure(0, weight=1)
 
         # Top: Matrice + Graphe côte à côte
-        top = tk.Frame(body, bg=C["bg"])
+        top = tk.Frame(scrollable_frame, bg=C["bg"])
         top.pack(fill="both", expand=True, padx=8, pady=8)
         top.grid_rowconfigure(0, weight=1)
         top.grid_columnconfigure(0, weight=1)
@@ -541,7 +564,7 @@ class App(tk.Tk):
         self._build_graph_panel(right_frame)
 
         # BOTTOM: Résultats
-        self._build_result_panel(body)
+        self._build_result_panel(scrollable_frame)
         self._build_statusbar()
 
     def _build_header(self):
@@ -732,7 +755,7 @@ class App(tk.Tk):
                  bg=C["surface"], fg=C["violet"],
                  font=("Segoe UI", 10, "bold")).pack(anchor="w", side="left", fill="x", expand=True)
 
-        # Créer un canvas scrollable pour le contenu des matrices
+        # Créer le Canvas scrollable pour le contenu des matrices
         steps_container = tk.Frame(sp, bg=C["surface"], highlightthickness=0)
         steps_container.pack(fill="both", expand=True, padx=0, pady=0)
 
@@ -755,8 +778,8 @@ class App(tk.Tk):
         steps_container.grid_rowconfigure(0, weight=1)
         steps_container.grid_columnconfigure(0, weight=1)
         
-        # Créer le ScrolledText dans le frame scrollable
-        self.steps_txt = ScrolledText(self.steps_scrollable_frame, wrap="none", 
+        # Créer un Text widget SANS ScrolledText (pas de double scrollbar)
+        self.steps_txt = tk.Text(self.steps_scrollable_frame, wrap="none", 
                                       height=11,
                                       font=("Consolas", 9), relief="flat",
                                       bg=C["bg"], fg=C["text"],
