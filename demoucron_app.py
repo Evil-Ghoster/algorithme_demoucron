@@ -526,16 +526,37 @@ class App(tk.Tk):
         
         # Canvas pour scroller le contenu
         main_canvas = tk.Canvas(body_container, bg=C["bg"], highlightthickness=0)
-        scrollbar = tk.Scrollbar(body_container, orient="vertical", command=main_canvas.yview)
+        scrollbar = tk.Scrollbar(
+            body_container, orient="vertical",
+            command=main_canvas.yview,
+            width=6           # ← réduit de ~17 à 6px
+        )
         scrollable_frame = tk.Frame(main_canvas, bg=C["bg"])
-        
+
         scrollable_frame.bind(
             "<Configure>",
             lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all"))
         )
-        
-        main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        main_canvas.configure(yscrollcommand=scrollbar.set)
+
+        win_id = main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+
+        #  étirer le frame interne à la largeur du canvas
+        def _on_canvas_resize(event):
+            main_canvas.itemconfig(win_id, width=event.width)
+        main_canvas.bind("<Configure>", _on_canvas_resize)
+
+        #  masquer la scrollbar si pas nécessaire
+        def _yscroll_set(first, last):
+            if float(first) <= 0.0 and float(last) >= 1.0:
+                scrollbar.grid_remove()
+            else:
+                scrollbar.grid()
+            main_canvas.yview_moveto(first)
+
+        main_canvas.configure(yscrollcommand=_yscroll_set)   
+
+        main_canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
         
         # Mousewheel scroll
         def _on_mousewheel(event):
