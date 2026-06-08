@@ -521,6 +521,8 @@ class App(tk.Tk):
         # Main body avec scroll global
         body_container = tk.Frame(self, bg=C["bg"])
         body_container.pack(fill="both", expand=True)
+        body_container.grid_rowconfigure(0, weight=1)
+        body_container.grid_columnconfigure(0, weight=1)
         
         # Canvas pour scroller le contenu
         main_canvas = tk.Canvas(body_container, bg=C["bg"], highlightthickness=0)
@@ -540,11 +542,8 @@ class App(tk.Tk):
             main_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         main_canvas.bind_all("<MouseWheel>", _on_mousewheel)
         
-        main_canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        body_container.grid_rowconfigure(0, weight=1)
-        body_container.grid_columnconfigure(0, weight=1)
+        main_canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
 
         # Top: Matrice + Graphe côte à côte
         top = tk.Frame(scrollable_frame, bg=C["bg"])
@@ -670,9 +669,10 @@ class App(tk.Tk):
                  font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 6))
 
         gcard = tk.Frame(p, bg=C["surface"],
-                         highlightbackground=C["border"], highlightthickness=1,
-                         height=350)
+                         highlightbackground=C["border"], highlightthickness=1)
         gcard.pack(fill="both", expand=True)
+        gcard.grid_rowconfigure(0, weight=1)
+        gcard.grid_columnconfigure(0, weight=1)
 
         self.gc = GraphCanvas(gcard, on_node_click=self._graph_node_dblclick)
         gsy = tk.Scrollbar(gcard, orient="vertical", command=self.gc.yview)
@@ -681,8 +681,6 @@ class App(tk.Tk):
         self.gc.grid(row=0, column=0, sticky="nsew")
         gsy.grid(row=0, column=1, sticky="ns")
         gsx.grid(row=1, column=0, sticky="ew")
-        gcard.grid_rowconfigure(0, weight=1)
-        gcard.grid_columnconfigure(0, weight=1)
 
         bf = tk.Frame(p, bg=C["bg"])
         bf.pack(fill="x", pady=(6, 0))
